@@ -20,16 +20,18 @@ public static class FeatureExtractor
         Headscarf, Chapka, ArmorBear
     };
 
+    // TrackedItems tem 27 itens — se mudar a lista, atualize este número
     public const int FeatureCount =
         8 +                         // status do agente
         2 +                         // dia/noite + progresso do ciclo
-        TrackedItems.Length +       // inventário
+        27 +                        // inventário (TrackedItems)
         8 +                         // recursos próximos (dir + dist normalizada)
         6 +                         // ghouls próximos
         4 +                         // construções / fogo
         4 +                         // drops no chão
         3 +                         // craft / research info
         2;                          // time / level
+
 
     public static float[] Extract(World w, Agent a)
     {

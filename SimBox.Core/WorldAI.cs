@@ -206,6 +206,7 @@ public sealed partial class World
             for (int s = 1; s <= steps && !dead; s++)
             {
                 var np = p.Pos + p.Dir * (travel * s / steps);
+                if (WallActive && MathF.Abs(np.X - W / 2) <= Cfg.Cell / 2) { dead = true; break; }      // o muro do meio para qualquer projétil
                 Agent? owner = !p.FromRobot && p.OwnerId >= 0 && p.OwnerId < Agents.Length ? Agents[p.OwnerId] : null;
                 foreach (var g in Ghouls)
                     if (g.Alive && Vector2.DistanceSquared(np, g.Pos) <= MathF.Pow(Defs.Ghouls[(int)g.Kind].Radius + 6, 2)) { DamageGhoul(g, p.Dmg, owner, p.Kind); dead = true; break; }

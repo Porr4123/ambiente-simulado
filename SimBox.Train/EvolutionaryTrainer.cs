@@ -34,6 +34,10 @@ public sealed class EvolutionaryTrainer
     public Action<string>? OnEvent;
     /// <summary>0 = o mais rápido possível; N = N× o tempo real (para acompanhar no monitor).</summary>
     public volatile float Speed;
+    /// <summary>Ctrl+S no console: o treino para ao fim da geração em curso.</summary>
+    public volatile bool StopRequested;
+    /// <summary>2º Ctrl+S: encerra a geração em curso agora (ela ainda é avaliada e gravada).</summary>
+    public volatile bool EndNow;
     public RunLogger? Logger;
     public int Seed { get; }
 
@@ -87,7 +91,8 @@ public sealed class EvolutionaryTrainer
         Crates = 30,
         Bushes = 60,
         Animals = 25,
-        TeamSpawns = true               // time 0 nasce à esquerda, time 1 à direita
+        TeamSpawns = true,              // time 0 nasce à esquerda, time 1 à direita
+        TeamWall = true                 // muro vertical no meio separa os times; some nos 2 últimos dias (WallOpenTime, definido em RunGeneration)
     };
 
     /// <summary>
@@ -101,6 +106,7 @@ public sealed class EvolutionaryTrainer
         int weeks = CurrentWeeks = WeeksForGeneration(Generation);
         var cfg = MakeConfig();
         float simSeconds = SimSeconds = weeks * 7 * cfg.Cycle;
+        cfg.WallOpenTime = simSeconds - 2 * cfg.Cycle;      // muro cai no começo dos 2 últimos dias
         int worldSeed = rng.Next();
 
         var world = new World(cfg, PopulationSize, worldSeed);
@@ -127,7 +133,7 @@ public sealed class EvolutionaryTrainer
         int decideEvery = 2;                // rede só pensa a cada 2 ticks
         int progressEvery = Math.Max(1, totalTicks / 50);
         Progress = 0f;
-        var pace = Stopwatch.StartNew();
+        var pace = Stopwatch.StartNew(); float lastSpeed = Speed; int paceTick = 0;
 
         for (int tick = 0; tick < totalTicks; tick++)
         {
@@ -150,13 +156,14 @@ public sealed class EvolutionaryTrainer
             }
 
             float speed = Speed;
-            if (speed > 0 && tick % 4 == 0)
+            if (speed != lastSpeed) { lastSpeed = speed; paceTick = tick; pace.Restart(); }     // mudou a velocidade (botão slow): refaz a referência, senão tentaria "compensar" o tempo passado
+            if (speed > 0 && (speed <= 2f || tick % 4 == 0))                                      // em câmera lenta dorme a cada tick (movimento fluido no monitor)
             {
-                double ahead = (tick + 1) / (cfg.Tps * (double)speed) - pace.Elapsed.TotalSeconds;
+                double ahead = (tick + 1 - paceTick) / (cfg.Tps * (double)speed) - pace.Elapsed.TotalSeconds;
                 if (ahead > 0.002) Thread.Sleep((int)(ahead * 1000));
             }
 
-            if (world.Done) break;
+            if (world.Done || EndNow) break;
         }
 
         Progress = 1f;
@@ -177,6 +184,7 @@ public sealed class EvolutionaryTrainer
             brain.EnemyKills = agent.EnemyKills; brain.FriendKills = agent.FriendKills;
             brain.EnemyDmg = agent.EnemyDmg; brain.FriendDmg = agent.FriendDmg;
             brain.ToolsMade = agent.ToolsMade; brain.Donations = agent.Donations;
+            brain.StationsMade = agent.StationsMade; brain.GoodMeals = agent.GoodMeals; brain.WastedMeals = agent.WastedMeals;
 
             bool survived = agent.Alive;
             brain.Survived = survived;
@@ -221,18 +229,19 @@ public sealed class EvolutionaryTrainer
         var inv = CultureInfo.InvariantCulture;
         var sb = new StringBuilder();
         sb.AppendLine($"=== Geração {CurrentGeneration} === {weeks} semana(s) · seed do mundo {worldSeed} · seed do treino {Seed}");
-        sb.AppendLine($"Simulado: {w.Time:0}s de {SimSeconds:0}s (dia {w.DayNumber}){(w.Done ? " — todos morreram, geração encerrada antes" : "")} · tempo real: {wallSec:0.0}s");
+        sb.AppendLine($"Simulado: {w.Time:0}s de {SimSeconds:0}s (dia {w.DayNumber}){(w.Done ? " — todos morreram, geração encerrada antes" : EndNow ? " — geração encerrada antes (Ctrl+S)" : "")} · tempo real: {wallSec:0.0}s");
         sb.AppendLine(string.Format(inv, "Melhor fitness {0:0.0} · média {1:0.0} · sobreviventes {2}/{3}", BestFitness, AvgFitness, SurvivorsLastGen, PopulationSize));
         sb.AppendLine(string.Format(inv, "Time 0 (azul): {0:0.0}   Time 1 (vermelho): {1:0.0}", Team0Score, Team1Score));
         sb.AppendLine($"Ghouls abatidos: {w.KillsByKind.Sum()} (por tipo: {string.Join("/", w.KillsByKind)}) · mortes: {w.Deaths}");
         sb.AppendLine("Regras: fitness = reward + 100 (vivo no fim) / -50 (morto) + 2·nível · mortos só renascem na próxima geração");
+        sb.AppendLine($"Muro entre os times: até {cfg.WallOpenTime:0}s (cai nos 2 últimos dias) · refBoa = comeu sem desperdício (bônus), refDesp = desperdiçou/comida que fere");
         sb.AppendLine();
-        sb.AppendLine("  # slot time  fitness  reward vivo  nív ghouls  killsInim killsAmigo  danoInim danoAmigo ferram doações");
+        sb.AppendLine("  # slot time  fitness  reward vivo  nív ghouls  killsInim killsAmigo  danoInim danoAmigo ferram doações estaç refBoa refDesp");
         for (int k = 0; k < ranked.Length; k++)
         {
             var b = ranked[k];
-            sb.AppendLine(string.Format(inv, "{0,3} {1,4}  T{2} {3,9:0.0} {4,8:0.0} {5,4} {6,4} {7,6} {8,10} {9,10} {10,9:0} {11,8:0} {12,6} {13,6}",
-                k + 1, b.SlotId, b.Team, b.Fitness, b.RawReward, b.Survived ? "sim" : "não", b.FinalLevel, b.FinalKills, b.EnemyKills, b.FriendKills, b.EnemyDmg, b.FriendDmg, b.ToolsMade, b.Donations));
+            sb.AppendLine(string.Format(inv, "{0,3} {1,4}  T{2} {3,9:0.0} {4,8:0.0} {5,4} {6,4} {7,6} {8,10} {9,10} {10,9:0} {11,8:0} {12,6} {13,6} {14,5} {15,6} {16,7}",
+                k + 1, b.SlotId, b.Team, b.Fitness, b.RawReward, b.Survived ? "sim" : "não", b.FinalLevel, b.FinalKills, b.EnemyKills, b.FriendKills, b.EnemyDmg, b.FriendDmg, b.ToolsMade, b.Donations, b.StationsMade, b.GoodMeals, b.WastedMeals));
         }
         sb.AppendLine();
         sb.AppendLine($"--- Eventos ({events.Count}) ---");

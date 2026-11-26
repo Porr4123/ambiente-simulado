@@ -19,6 +19,9 @@ public sealed class AgentBrain
     public float FriendDmg { get; set; }
     public int ToolsMade { get; set; }
     public int Donations { get; set; }
+    public int StationsMade { get; set; }  // estações de trabalho fabricadas
+    public int GoodMeals { get; set; }     // comeu/curou sem desperdiçar
+    public int WastedMeals { get; set; }   // comeu desperdiçando (ou comida que fere)
     public int SlotId { get; set; }        // índice do agente no mundo (só para registro)
 
     /// <summary>Última decisão da rede (para o monitor de foco).</summary>
@@ -54,13 +57,13 @@ public sealed class AgentBrain
     {
         Fitness = Fitness, Survived = Survived, Deaths = Deaths, RawReward = RawReward,
         FinalLevel = FinalLevel, FinalKills = FinalKills, EnemyKills = EnemyKills, FriendKills = FriendKills,
-        EnemyDmg = EnemyDmg, FriendDmg = FriendDmg, ToolsMade = ToolsMade, Donations = Donations, SlotId = SlotId
+        EnemyDmg = EnemyDmg, FriendDmg = FriendDmg, ToolsMade = ToolsMade, Donations = Donations, StationsMade = StationsMade, GoodMeals = GoodMeals, WastedMeals = WastedMeals, SlotId = SlotId
     };
 
     public void ResetStats()
     {
         Fitness = RawReward = EnemyDmg = FriendDmg = 0;
-        Survived = false; Deaths = FinalLevel = FinalKills = EnemyKills = FriendKills = ToolsMade = Donations = 0;
+        Survived = false; Deaths = FinalLevel = FinalKills = EnemyKills = FriendKills = ToolsMade = Donations = StationsMade = GoodMeals = WastedMeals = 0;
         LastInput = default;
     }
 

@@ -198,6 +198,17 @@ public static class Defs
         _ => 0f
     };
 
+    /// <summary>Bônus (1x por geração por agente) ao fabricar uma estação de trabalho. Estações melhores valem mais.</summary>
+    public static float StationBonus(Item i) => i switch
+    {
+        Campfire => 8f,
+        Workbench or Abrasador => 20f,
+        SewingTable => 25f,
+        ResearchTable => 40f,
+        Smelter => 60f,
+        _ => 0f
+    };
+
     // ---- XP: [wiki] 450, 950, 1450 nos 3 primeiros níveis; depois cresce ~160 por nível (≈26k no nível 20) [aproximação]
     public static int XpFor(int level)
     {
@@ -301,12 +312,15 @@ public static class Rw
     public const float HitGhoul = 0.01f;        // por ponto de dano em ghoul (× TechMult)
     public const float KillGhoulBase = 2f, KillGhoulPerKind = 1.5f;   // (base + por tipo) × TechMult
     public const float DonateFactor = 0.5f;     // doador ganha ToolBonus(item doado) × fator
+    public const float EatPerPoint = 0.06f;     // comer/curar SEM desperdício: bônus por ponto de fome/vida realmente recuperado (cozida = ~7,6; laranja = 2,4; bandagem = 3,6)
 }
 
 public sealed class SimConfig
 {
     public float TeamSpawnSpacing = 220f;                   // distância entre agentes do mesmo time no spawn (evita fogo amigo por amontoamento)
     public bool TeamSpawns;                                 // treino: time 0 nasce à esquerda e time 1 à direita (senão: grupo no centro)
+    public bool TeamWall;                                   // treino: muro vertical (1 célula de espessura) no meio do mapa separando os times
+    public float WallOpenTime = float.MaxValue;             // segundo da simulação em que o muro some (treino: começo dos 2 últimos dias)
     public int Tps = 30;
     public float WorldW = 6000, WorldH = 6000, Cell = 100;
     public float DayLen = 480, NightLen = 480;              // [wiki] 1 dia = 1 noite = 8 min

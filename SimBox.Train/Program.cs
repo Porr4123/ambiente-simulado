@@ -4,7 +4,7 @@ using SimBox.Train;
 
 // SimBox.Train — Neuroevolução headless com console + monitor duplo no navegador
 //   dotnet run --project SimBox.Train -c Release -- [opções]
-//     --gens N        número de gerações (padrão 100)
+//     --gens N        limite de gerações (padrão: ilimitado — pare com Ctrl+S no console; 2× Ctrl+S encerra a geração em curso já)
 //     --seed N        semente do treino (reproduzível)
 //     --out DIR       pasta dos registros (padrão ./runs)
 //     --port N        porta do monitor (padrão 5080)
@@ -14,7 +14,7 @@ using SimBox.Train;
 //     --nomonitor     sem servidor de monitor
 //     --quiet         sem painel no console (uma linha por geração)
 
-int gens = 100, port = 5080; int? seed = null; float speed = 0; string outDir = "runs"; string? resumeDir = null;
+int gens = 0, port = 5080; int? seed = null; float speed = 0; string outDir = "runs"; string? resumeDir = null;   // gens 0 = ilimitado
 bool open = true, monitorOn = true, quiet = false;
 var inv = CultureInfo.InvariantCulture;
 for (int i = 0; i < args.Length; i++)
@@ -71,8 +71,29 @@ if (!quiet)
 Console.WriteLine($"Registro: {Path.GetFullPath(trainer.Logger.RunDir)}   seed do treino: {trainer.Seed}");
 Console.WriteLine(monitorInfo);
 
-var swTotal = Stopwatch.StartNew();
-for (int g = 0; g < gens; g++)
+// Ctrl+S no console: 1ª vez = para ao fim da geração em curso (ela é gravada); 2ª vez = encerra a geração em curso já.
+if (!Console.IsInputRedirected)
+{
+    new Thread(() =>
+    {
+        try
+        {
+            while (true)
+            {
+                var k = Console.ReadKey(intercept: true);
+                if (k.KeyChar == '\u0013' || (k.Key == ConsoleKey.S && (k.Modifiers & ConsoleModifiers.Control) != 0))
+                {
+                    if (trainer.StopRequested) trainer.EndNow = true; else trainer.StopRequested = true;
+                }
+            }
+        }
+        catch { /* sem console interativo: só pelo Ctrl+C */ }
+    }) { IsBackground = true, Name = "teclado" }.Start();
+}
+Console.WriteLine(gens > 0 ? $"Limite: {gens} gerações · Ctrl+S para parar antes." : "Gerações ilimitadas · Ctrl+S para parar ao fim da geração (2× = encerrar a geração em curso já).");
+
+var swTotal = Stopwatch.StartNew(); int ran = 0;
+for (int g = 0; !trainer.StopRequested && (gens <= 0 || g < gens); g++)
 {
     var sw = Stopwatch.StartNew();
     int weeks = trainer.WeeksForGeneration(trainer.Generation);
@@ -84,7 +105,7 @@ for (int g = 0; g < gens; g++)
         if (!quiet) DrawDashboard(trainer, weeks, running: true, elapsed: sw.Elapsed, progress: progress);
     });
 
-    sw.Stop();
+    sw.Stop(); ran++;
     if (quiet)
         Console.WriteLine(string.Format(inv, "ger {0,3} | {1}s | melhor {2,8:F1} | média {3,8:F1} | vivos {4,2}/32 | T0 {5,8:F1} T1 {6,8:F1} | inimigos {7} amigos {8} | {9}",
             trainer.CurrentGeneration, sw.Elapsed.TotalSeconds.ToString("F1", inv), trainer.BestFitness, trainer.AvgFitness, trainer.SurvivorsLastGen, trainer.Team0Score, trainer.Team1Score,
@@ -94,7 +115,7 @@ for (int g = 0; g < gens; g++)
 
 try { Console.CursorVisible = true; } catch { }
 Console.WriteLine();
-Console.WriteLine("Treino finalizado.");
+Console.WriteLine(trainer.StopRequested ? $"Treino parado por Ctrl+S após {ran} geração(ões)." : "Treino finalizado.");
 Console.WriteLine($"Melhor fitness da última geração: {trainer.BestFitness:F1}");
 Console.WriteLine($"Tempo total: {swTotal.Elapsed:hh\\:mm\\:ss}   ·   registros em {Path.GetFullPath(trainer.Logger.RunDir)}");
 return 0;
@@ -133,7 +154,7 @@ static void DrawDashboard(EvolutionaryTrainer t, int weeks, bool running, TimeSp
     Console.WriteLine();
 
     Console.WriteLine("Top 8 agentes da última geração:");
-    Console.WriteLine(" #  Time  Fitness   Surv   Reward  Nív  Ghouls  Inim  Amigo  Ferr  Doa ");
+    Console.WriteLine(" #  Time  Fitness   Surv   Reward  Nív  Ghouls  Inim  Amigo  Ferr  Doa  Est  Ref(b/d)");
     Console.WriteLine(new string('─', 78));
 
     var top = t.LastTop8;
@@ -144,7 +165,7 @@ static void DrawDashboard(EvolutionaryTrainer t, int weeks, bool running, TimeSp
             var b = top[i];
             string team = b.Team == 0 ? "T0" : "T1";
             string surv = b.Survived ? "SIM" : "não";
-            Console.WriteLine($"{i + 1,2}   {team}  {b.Fitness,8:F1}   {surv,3}  {b.RawReward,7:F1}  {b.FinalLevel,3}  {b.FinalKills,6}  {b.EnemyKills,4}  {b.FriendKills,5}  {b.ToolsMade,4}  {b.Donations,3}   ");
+            Console.WriteLine($"{i + 1,2}   {team}  {b.Fitness,8:F1}   {surv,3}  {b.RawReward,7:F1}  {b.FinalLevel,3}  {b.FinalKills,6}  {b.EnemyKills,4}  {b.FriendKills,5}  {b.ToolsMade,4}  {b.Donations,3}  {b.StationsMade,3}  {b.GoodMeals,3}/{b.WastedMeals,-3}");
         }
         else Console.WriteLine(new string(' ', 78));
     }
@@ -152,7 +173,8 @@ static void DrawDashboard(EvolutionaryTrainer t, int weeks, bool running, TimeSp
     Console.WriteLine();
     Console.WriteLine("fitness = reward da geração + 100 (vivo) / -50 (morto) + 2·nível · mortos só renascem na próxima geração");
     Console.WriteLine("times: fogo amigo e matar amigo penalizam · acertar/matar rival e ghouls (mais com armas melhores) bonificam");
-    Console.WriteLine("ferramenta fabricada: bônus 1x/geração · melhor da família → doa a anterior ao colega ou joga fora");
+    Console.WriteLine("ferramenta/estação fabricada: bônus 1x/geração · comer sem desperdiçar bonifica · muro no meio até os 2 últimos dias");
     Console.WriteLine("Primeiras 28 gerações = 1 semana   |   Depois = 2 semanas   |   Top 8 salvo em runs/run_.../gen_XXXX/");
+    Console.WriteLine(t.EndNow ? "⏹ encerrando a geração em curso agora...                                      " : t.StopRequested ? "⏹ parada solicitada: termina ao fim desta geração (Ctrl+S de novo = encerrar já)       " : "Ctrl+S: parar ao fim da geração (2× = encerrar a geração em curso já)                    ");
     Console.WriteLine(new string('─', 78));
 }

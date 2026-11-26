@@ -28,6 +28,8 @@ public sealed class MonitorServer
     World? nodesWorld; int nodesAlive = -1;
 
     int focusId = -1;
+    readonly float baseSpeed;                 // velocidade escolhida na linha de comando (0 = máxima)
+    volatile bool slowOn;                     // botão "slow" do painel de foco
     readonly Queue<string> recent = new();     // só mexe nele o thread da simulação
 
     public string MapUrl => $"http://localhost:{port}/";
@@ -35,7 +37,7 @@ public sealed class MonitorServer
 
     public MonitorServer(EvolutionaryTrainer trainer, int port)
     {
-        this.trainer = trainer; this.port = port;
+        this.trainer = trainer; this.port = port; baseSpeed = trainer.Speed;
         using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("monitor.html") ?? throw new InvalidOperationException("monitor.html não embutido");
         using var ms = new MemoryStream(); s.CopyTo(ms); html = ms.ToArray();
         trainer.OnFrame += w => Update(w);
@@ -79,6 +81,13 @@ public sealed class MonitorServer
             if (s.Length > 1) s = s[..^1] + extra + "}"; else s = "{" + extra[1..] + "}";
             body = Encoding.UTF8.GetBytes(s); type = "application/json; charset=utf-8";
         }
+        else if (path == "/api/slow")
+        {
+            // on=1 → desacelera até 1× tempo real (se já estava mais lento, mantém); on=0 → volta à velocidade da linha de comando
+            slowOn = ctx.Request.QueryString["on"] == "1";
+            trainer.Speed = slowOn ? (baseSpeed > 0 && baseSpeed < 1f ? baseSpeed : 1f) : baseSpeed;
+            body = Encoding.UTF8.GetBytes($"{{\"slow\":{(slowOn ? "true" : "false")},\"speed\":{trainer.Speed.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}"); type = "application/json; charset=utf-8";
+        }
         else if (path == "/" || path == "/focus" || path == "/index.html") { body = html; type = "text/html; charset=utf-8"; }
         else { ctx.Response.StatusCode = 404; ctx.Response.Close(); return; }
         ctx.Response.ContentType = type; ctx.Response.ContentLength64 = body.Length;
@@ -92,7 +101,8 @@ public sealed class MonitorServer
     public void Update(World w)
     {
         long now = sw.ElapsedMilliseconds;
-        if (now - lastMs < 100) return;
+        float sp = trainer.Speed;
+        if (now - lastMs < (sp > 0 && sp <= 2f ? 50 : 100)) return;      // em câmera lenta o snapshot sai mais vezes por segundo (movimento mais fluido)
         lastMs = now;
         try { state = Build(w); } catch { /* um snapshot ruim não pode derrubar o treino */ }
     }
@@ -130,7 +140,8 @@ public sealed class MonitorServer
             j.WriteNumber("W", w.W); j.WriteNumber("H", w.H); j.WriteNumber("cell", w.Cfg.Cell);
             j.WriteNumber("best", MathF.Round(trainer.BestFitness, 1)); j.WriteNumber("avg", MathF.Round(trainer.AvgFitness, 1));
             j.WriteNumber("sc0", MathF.Round(trainer.Team0Score, 1)); j.WriteNumber("sc1", MathF.Round(trainer.Team1Score, 1));
-            j.WriteNumber("speed", trainer.Speed);
+            j.WriteNumber("speed", trainer.Speed); j.WriteBoolean("slow", slowOn);
+            j.WriteBoolean("wall", w.WallActive); j.WriteNumber("wx", w.W / 2); j.WriteNumber("wt", w.Cfg.Cell);
 
             j.WriteStartArray("ag");
             for (int i = 0; i < count; i++)

@@ -282,6 +282,15 @@ public sealed partial class World
         AddXp(a, 10 + 12 * rec.Level); Rewards[a.Id] += 0.05f;
         Say(a, $"Pronto: {Defs.Name(rec.Out)} x{rec.OutN}");
         if (Defs.ToolFamily(rec.Out) >= 0) ToolObtained(a, rec.Out, true);
+        StationMade(a, rec.Out);
+    }
+
+    /// <summary>Fabricou uma estação de trabalho (bancada, mesa de pesquisa/costura, fogueira, abrasador, smelter): bônus grande, 1x por item por agente por geração.</summary>
+    void StationMade(Agent a, Item it)
+    {
+        float b = Defs.StationBonus(it); if (b <= 0 || a.StationPaid[(int)it]) return;
+        a.StationPaid[(int)it] = true; a.StationsMade++; Rewards[a.Id] += b;
+        Trace?.Invoke($"{T()} A{a.Id}(T{a.Team}) fabricou estação {Defs.Name(it)} (+{b:0} bônus)");
     }
 
     // ================================================================== ferramentas: bônus de fabricação, descarte e doação
@@ -343,10 +352,15 @@ public sealed partial class World
         if (Defs.Edible(it) is not (float food, float hp, float st) || a.Count(it) <= 0) return false;
         if (a.AttackCd > 0) return false;
         if (hp >= 0 && a.Hunger > Defs.StatMax - 20 && a.Hp >= Defs.StatMax - 5 && it != Bandage) return false;
+        // desperdício = o que passaria do máximo (fome ou vida); comida que fere (hp < 0, ex.: carne crua/podre) nunca paga o bônus
+        float wasted = MathF.Max(0, a.Hunger + food - Defs.StatMax) + (hp > 0 ? MathF.Max(0, a.Hp + hp - Defs.StatMax) : 0);
         RemoveItem(a, it, 1); a.AttackCd = 0.8f;
         a.Hunger = MathF.Min(Defs.StatMax, a.Hunger + food); a.Stamina = MathF.Min(Defs.StatMax, a.Stamina + st);
         if (hp > 0) a.Hp = MathF.Min(Defs.StatMax, a.Hp + hp); else if (hp < 0) HurtAgent(a, -hp, false);
-        Rewards[a.Id] += 0.03f; return true;
+        Rewards[a.Id] += 0.03f;
+        if (hp >= 0 && wasted <= 0.01f) { a.GoodMeals++; Rewards[a.Id] += Rw.EatPerPoint * (food + hp); }   // comeu sem desperdiçar: bônus proporcional ao que recuperou
+        else a.WastedMeals++;
+        return true;
     }
 
     static bool InArc(Vector2 origin, Vector2 dir, Vector2 target, float tr, float reach, float half)

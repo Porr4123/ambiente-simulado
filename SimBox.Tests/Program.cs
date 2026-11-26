@@ -271,6 +271,37 @@ static class T
         w = Duel(0, 255); a = w.Agents[0]; Give(w.Agents[1], AxeIron, 1, w); Give(a, AxeBasic, 1, w); Give(a, AxeIron, 1, w); w.ToolObtained(a, AxeIron, true);
         Check(!a.Has(AxeBasic) && !w.Agents[1].Has(AxeBasic) && Near(w.Rewards[0], Defs.ToolBonus(AxeIron), 0.01f), "colega já tem igual/melhor: não doa (joga fora) e não há bônus de doação");
 
+        // ---------------- muro entre os times (cai nos 2 últimos dias)
+        w = Mk(c => { c.TeamWall = true; c.WallOpenTime = 6f; }); a = w.Agents[0]; Place(a, 2700, 3000);
+        Run(w, 3f, I(mx: 1), true);
+        Check(w.WallActive && Near(a.Pos.X, 3000 - 50 - a.Radius, 2), $"muro: agente não atravessa (parou em x={a.Pos.X:0})");
+        Run(w, 4f, I(), true); Check(!w.WallActive, "muro: some depois de WallOpenTime");
+        Run(w, 2f, I(mx: 1), true); Check(a.Pos.X > 3100, $"muro: depois que cai, dá para passar (x={a.Pos.X:0})");
+        w = Mk(c => { c.TeamWall = true; c.WallOpenTime = 600f; }, 2); Place(w.Agents[0], 2900, 3000); Place(w.Agents[1], 3110, 3000);
+        Give(w.Agents[0], Spear, 1, w); Select(w, Spear); One(w, I(atk: true, aim: 0, dist: 300)); Run(w, 1f, I());
+        Check(w.Agents[1].Hp == 255, "muro: para a lança (ninguém é atingido do outro lado)");
+        w = Mk(c => { c.TeamWall = false; }, 2); Place(w.Agents[0], 2900, 3000); Place(w.Agents[1], 3110, 3000);
+        Give(w.Agents[0], Spear, 1, w); Select(w, Spear); One(w, I(atk: true, aim: 0, dist: 300)); Run(w, 1f, I());
+        Check(w.Agents[1].Hp < 255, "sem muro a mesma lança acerta (controle do teste)");
+        Check(!new World(Cfg(), 1, 1, -1).WallActive, "WallActive é falso por padrão (jogo normal não tem muro)");
+
+        // ---------------- bônus por fabricar estações de trabalho e por comer sem desperdício
+        w = Mk(); w.AccumulateRewards = true; a = w.Agents[0];
+        Give(a, Wood, 40, w); Give(a, Stone, 20, w); float r0 = w.Rewards[0]; Craft(w, Workbench);
+        Check(a.Has(Workbench) && w.Rewards[0] - r0 >= Defs.StationBonus(Workbench) && a.StationsMade == 1, $"fabricar estação: bônus grande (+{w.Rewards[0] - r0:0.0})");
+        Check(Defs.StationBonus(Campfire) < Defs.StationBonus(Workbench) && Defs.StationBonus(Workbench) < Defs.StationBonus(ResearchTable) && Defs.StationBonus(ResearchTable) < Defs.StationBonus(Smelter), "estações melhores valem mais");
+        Give(a, Wood, 40, w); Give(a, Stone, 20, w); r0 = w.Rewards[0]; Craft(w, Workbench);
+        Check(w.Rewards[0] - r0 < 1f && a.StationsMade == 1, $"mesma estação: bônus só 1x por geração (+{w.Rewards[0] - r0:0.00})");
+        w = Mk(); w.AccumulateRewards = true; a = w.Agents[0]; a.Hunger = 100; Give(a, Orange, 3, w); r0 = w.Rewards[0];
+        One(w, I(cmd: Cmd.Eat, arg: (int)Orange));
+        Check(a.GoodMeals == 1 && w.Rewards[0] - r0 > Rw.EatPerPoint * 40 * 0.9f, $"comer sem desperdício: bônus (+{w.Rewards[0] - r0:0.00})");
+        Run(w, 1f, I()); a.Hunger = 220; r0 = w.Rewards[0]; One(w, I(cmd: Cmd.Eat, arg: (int)Orange));
+        Check(a.WastedMeals == 1 && w.Rewards[0] - r0 < 0.5f, $"comer desperdiçando: sem bônus (+{w.Rewards[0] - r0:0.00})");
+        w = Mk(); w.AccumulateRewards = true; a = w.Agents[0]; a.Hunger = 100; Give(a, Meat, 1, w); r0 = w.Rewards[0]; One(w, I(cmd: Cmd.Eat, arg: (int)Meat));
+        Check(a.GoodMeals == 0 && w.Rewards[0] - r0 < 0.5f, "carne crua (fere) não paga o bônus");
+        w = Mk(); w.AccumulateRewards = true; a = w.Agents[0]; a.Hp = 100; Give(a, Bandage, 1, w); r0 = w.Rewards[0]; One(w, I(cmd: Cmd.Eat, arg: (int)Bandage));
+        Check(a.GoodMeals == 1 && w.Rewards[0] - r0 > Rw.EatPerPoint * 60 * 0.9f, "curar sem passar do máximo: bônus");
+
         // ---------------- estresse
         var cfgS = Cfg(c => { c.DayLen = 30; c.NightLen = 30; c.Trees = 300; c.Rocks = 100; c.IronNodes = 40; c.SulfurNodes = 20; c.Crates = 20; c.Bushes = 40; c.Animals = 20; });
         var ws = new World(cfgS, 6, 5, -1); var rnd = new Random(2); var inp = new AgentInput[6];

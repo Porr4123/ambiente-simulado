@@ -6,7 +6,7 @@ namespace SimBox.Train;
 /// <summary>
 /// Registro do treino em pasta:
 ///   runs/run_AAAAMMDD_HHMMSS/summary.csv
-///   runs/run_.../gen_0001/log.txt            (resumo, tabela dos 32 agentes e eventos da geração)
+///   runs/run_.../gen_0001/log.txt            (resumo, tabela dos 64 agentes e eventos da geração)
 ///   runs/run_.../gen_0001/top1_a07_T0_f215.brain ... top8_...   (os 8 melhores da geração)
 /// </summary>
 public sealed class RunLogger

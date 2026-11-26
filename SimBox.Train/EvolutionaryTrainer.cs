@@ -6,9 +6,9 @@ namespace SimBox.Train;
 
 public sealed class EvolutionaryTrainer
 {
-    public const int PopulationSize = 32;
+    public const int PopulationSize = 64;
     public const int EliteCount = 8;          // os 8 melhores passam (e são salvos em disco)
-    public const int TeamSize = 16;           // 16 por time (time = índice % 2)
+    public const int TeamSize = 32;           // 32 por time (time = índice % 2)
 
     public readonly AgentBrain[] Population;
     public int Generation { get; private set; }          // 0-based: próxima geração a rodar
@@ -270,7 +270,7 @@ public sealed class EvolutionaryTrainer
             next[i] = new AgentBrain(childNet, 0);
         }
 
-        // Times SEMPRE equilibrados 16×16 (antes, as elites mantinham o time antigo e os times saíam desiguais).
+        // Times SEMPRE equilibrados 32×32 (antes, as elites mantinham o time antigo e os times saíam desiguais).
         // Índice par → time 0, ímpar → time 1; as elites ficam intercaladas entre os dois.
         for (int i = 0; i < PopulationSize; i++)
         {

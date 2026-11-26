@@ -39,8 +39,8 @@ WASD anda · Shift corre (gasta stamina) · mouse mira · clique esquerdo usa o 
 
 Sem `--gens` o treino é **ilimitado**: pare com **Ctrl+S** no console (termina ao fim da geração em curso, que é gravada; um 2º Ctrl+S encerra a geração em curso já). `--gens N` define um limite opcional.
 
-32 agentes (2 times de 16, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2).
-Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o resto nasce de cruzamento + mutação. Os times são sempre 16×16.
+64 agentes (2 times de 32, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2).
+Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o resto nasce de cruzamento + mutação. Os times são sempre 32×32.
 
 **Regras**
 - **Muro**: um muro vertical (1 célula) no meio do mapa separa os times (barra agentes, ghouls, tiros, flechas e lanças). Ele some nos **2 últimos dias** da simulação (`SimConfig.TeamWall`/`WallOpenTime`).
@@ -55,7 +55,7 @@ Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o
 - Estações de trabalho: fabricar também dá bônus grande (`Defs.StationBonus`: fogueira 8, bancada/abrasador 20, mesa de costura 25, mesa de pesquisa 40, smelter 60), 1x por item por agente por geração.
 - Comer: comer/curar **sem desperdício** (sem passar de 255 de fome/vida) dá bônus de `Rw.EatPerPoint` (0,06) por ponto recuperado; comer desperdiçando, ou comida que fere (carne crua/podre), não paga bônus.
 
-**Registro** em `runs/run_AAAAMMDD_HHMMSS/`: `summary.csv`, e por geração `gen_0001/log.txt` (resumo, tabela dos 32 agentes, eventos) +
+**Registro** em `runs/run_AAAAMMDD_HHMMSS/`: `summary.csv`, e por geração `gen_0001/log.txt` (resumo, tabela dos 64 agentes, eventos) +
 `top1_...brain` … `top8_...brain` (os 8 melhores). `--resume runs/run_...` retoma da última geração gravada.
 
 **Monitor duplo** (abre duas abas; arraste uma para cada monitor): `http://localhost:5080/` = mapa (agentes azul/vermelho, recursos amarelos,

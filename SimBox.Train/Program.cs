@@ -107,7 +107,7 @@ for (int g = 0; !trainer.StopRequested && (gens <= 0 || g < gens); g++)
 
     sw.Stop(); ran++;
     if (quiet)
-        Console.WriteLine(string.Format(inv, "ger {0,3} | {1}s | melhor {2,8:F1} | média {3,8:F1} | vivos {4,2}/32 | T0 {5,8:F1} T1 {6,8:F1} | inimigos {7} amigos {8} | {9}",
+        Console.WriteLine(string.Format(inv, "ger {0,3} | {1}s | melhor {2,8:F1} | média {3,8:F1} | vivos {4,2}/64 | T0 {5,8:F1} T1 {6,8:F1} | inimigos {7} amigos {8} | {9}",
             trainer.CurrentGeneration, sw.Elapsed.TotalSeconds.ToString("F1", inv), trainer.BestFitness, trainer.AvgFitness, trainer.SurvivorsLastGen, trainer.Team0Score, trainer.Team1Score,
             trainer.LastTop8.Sum(b => b.EnemyKills), trainer.LastTop8.Sum(b => b.FriendKills), Path.GetFileName(trainer.LastGenDir)));
     else DrawDashboard(trainer, weeks, running: false, elapsed: sw.Elapsed, progress: 1f);
@@ -143,7 +143,7 @@ static void DrawDashboard(EvolutionaryTrainer t, int weeks, bool running, TimeSp
     Console.WriteLine(new string('─', 78));
 
     Console.WriteLine($"Melhor fitness : {t.BestFitness,8:F1}     Média: {t.AvgFitness,8:F1}      (última geração concluída)   ");
-    Console.WriteLine($"Sobreviventes  : {t.SurvivorsLastGen,2}/32                                              ");
+    Console.WriteLine($"Sobreviventes  : {t.SurvivorsLastGen,2}/64                                              ");
     Console.WriteLine();
 
     float total = Math.Abs(t.Team0Score) + Math.Abs(t.Team1Score) + 0.001f;

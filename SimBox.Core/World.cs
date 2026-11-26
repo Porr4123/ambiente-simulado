@@ -8,6 +8,9 @@ public struct AgentInput { public float Mx, My, Aim, AimDist; public bool Sprint
 public sealed class Agent
 {
     public int Id, Team, Kills; public bool IsHuman, IsLeader, Alive = true;
+    // estatísticas da geração (zeradas em Reset): combate entre times e ferramentas
+    public int EnemyKills, FriendKills, ToolsMade, Donations; public float EnemyDmg, FriendDmg;
+    public bool[] ToolPaid = Array.Empty<bool>(), DonatePaid = Array.Empty<bool>();   // bônus já pago nesta geração (por item)
     public Vector2 Pos, Vel; public float Radius = 30, Aim;
     public float Hp = 255, Hunger = 255, Cold = 255, Stamina = 255, Rad;
     public Slot[] Slots = Array.Empty<Slot>(); public int Selected;
@@ -52,6 +55,11 @@ public sealed partial class World
 
     public float Time; public long TickCount; public bool Done;
     public float[] Rewards;
+    /// <summary>true = Rewards acumula até o próximo Reset() (treino por gerações); false = zera a cada Step (API clássica).</summary>
+    public bool AccumulateRewards;
+    /// <summary>Linhas de registro de eventos importantes (mortes, kills entre agentes, ferramentas, doações).</summary>
+    public Action<string>? Trace;
+    string T() => $"[{Time,7:0.0}s]";
     public long[] KillsByKind = new long[5]; public long GhoulsSpawned, Deaths;
 
     // construções (uma por célula de 100 u)
@@ -76,7 +84,7 @@ public sealed partial class World
         ngrid = new List<Node>[NGW * NGH]; for (int i = 0; i < ngrid.Length; i++) ngrid[i] = new();
         Agents = new Agent[agentCount];
         for (int i = 0; i < agentCount; i++)
-            Agents[i] = new Agent { Id = i, IsLeader = i == 0, IsHuman = i == humanIndex, Slots = new Slot[cfg.InventorySlots], Mag = new int[Defs.ItemCount], Unlocked = new bool[Defs.ItemCount] };
+            Agents[i] = new Agent { Id = i, IsLeader = i == 0, IsHuman = i == humanIndex, Slots = new Slot[cfg.InventorySlots], Mag = new int[Defs.ItemCount], Unlocked = new bool[Defs.ItemCount], ToolPaid = new bool[Defs.ItemCount], DonatePaid = new bool[Defs.ItemCount] };
         Rewards = new float[agentCount];
         rng = new Rng(seed);
         Reset(seed);
@@ -86,23 +94,31 @@ public sealed partial class World
     public void Reset(int seed)
     {
         rng = new Rng(seed); nextId = 1; Time = 0; TickCount = 0; Done = false; prevTin = 0; rotT = 0;
-        Array.Clear(BldGrid); Array.Clear(FloorGrid); Array.Clear(bldHp);
+        Array.Clear(BldGrid); Array.Clear(FloorGrid); Array.Clear(bldHp); Array.Clear(Rewards);
         boxes.Clear(); fuel.Clear(); charge.Clear();
         Nodes.Clear(); Ghouls.Clear(); Animals.Clear(); Carcasses.Clear(); Drops.Clear(); Projs.Clear(); Robots.Clear(); Flares.Clear(); Events.Clear();
         foreach (var l in ngrid) l.Clear();
         Array.Clear(KillsByKind); GhoulsSpawned = Deaths = 0;
         GenerateWorld();
-        int k = 0;
-        foreach (var a in Agents) { ResetAgent(a, true); a.Pos = new Vector2(W / 2 + (k % 3 - 1) * 70, H / 2 + (k / 3 - 1) * 70); k++; }
+        int k = 0; var inTeam = new int[2];
+        foreach (var a in Agents)
+        {
+            ResetAgent(a, true);
+            if (Cfg.TeamSpawns) { int t = a.Team & 1, j = inTeam[t]++; var b = TeamBase(t); a.Pos = new Vector2(b.X + (j % 4 - 1.5f) * Cfg.TeamSpawnSpacing, b.Y + (j / 4 - 1.5f) * Cfg.TeamSpawnSpacing); }
+            else a.Pos = new Vector2(W / 2 + (k % 3 - 1) * 70, H / 2 + (k / 3 - 1) * 70);
+            k++;
+        }
         TopUpAnimals();
     }
+
+    public Vector2 TeamBase(int team) => new(W * ((team & 1) == 0 ? 0.25f : 0.75f), H / 2);
 
     void ResetAgent(Agent a, bool full)
     {
         a.Alive = true; a.Hp = a.Hunger = a.Cold = a.Stamina = Defs.StatMax; a.Rad = 0; a.AttackCd = a.CraftLeft = a.ReloadLeft = 0; a.CraftRecipe = -1;
         a.LastHurt = -99; a.Selected = 0; a.BornAt = Time; a.Vel = Vector2.Zero;
         Array.Clear(a.Slots); Array.Clear(a.Mag);
-        if (full) { a.Xp = 0; a.Level = 0; a.SkillPts = 0; a.Kills = 0; }
+        if (full) { a.Xp = 0; a.Level = 0; a.SkillPts = 0; a.Kills = 0; a.EnemyKills = a.FriendKills = a.ToolsMade = a.Donations = 0; a.EnemyDmg = a.FriendDmg = 0; Array.Clear(a.ToolPaid); Array.Clear(a.DonatePaid); }
         Array.Clear(a.Unlocked);
         foreach (var r in Defs.Recipes) if (r.SkillPts == 0) a.Unlocked[(int)r.Out] = true;
         AddItem(a, Stone, 2);                       // [wiki] você nasce com 2 pedras para fazer o machado
@@ -150,6 +166,7 @@ public sealed partial class World
             {
                 var p = new Vector2(rng.Float(80, W - 80), rng.Float(80, H - 80));
                 if (Vector2.Distance(p, center) < 350) continue;
+                if (Cfg.TeamSpawns && (Vector2.Distance(p, TeamBase(0)) < 450 || Vector2.Distance(p, TeamBase(1)) < 450)) continue;
                 if (!rng.Chance(weight(Sample(forest, gw, 600, p.X, p.Y), Sample(rocky, gw, 600, p.X, p.Y)))) continue;
                 float r = k == NodeKind.Tree ? 30 : 38; if (!NodeFree(p, r)) continue;
                 AddNode(k, p); placed++;
@@ -166,7 +183,7 @@ public sealed partial class World
         for (int c = 0; c < clusters; c++)
         {
             var cp = new Vector2(rng.Float(300, W - 300), rng.Float(300, H - 300));
-            if (Vector2.Distance(cp, center) < 500) { c--; continue; }
+            if (Vector2.Distance(cp, center) < 500 || (Cfg.TeamSpawns && (Vector2.Distance(cp, TeamBase(0)) < 600 || Vector2.Distance(cp, TeamBase(1)) < 600))) { c--; continue; }
             for (int i = 0; i < 5; i++) { var p = cp + new Vector2(rng.Float(-110, 110), rng.Float(-110, 110)); if (NodeFree(p, 30)) AddNode(NodeKind.Crate, p); }
         }
     }
@@ -244,7 +261,7 @@ public sealed partial class World
         if (Done) return;
         float dt = Dt;
         if (EmitEvents) Events.Clear();
-        Array.Clear(Rewards);
+        if (!AccumulateRewards) Array.Clear(Rewards);
         float tin = TimeInCycle;
         if (tin < prevTin) DayStart();                                   // virou o ciclo: amanheceu
         if (prevTin < Cfg.DayLen && tin >= Cfg.DayLen) DuskStart();      // anoiteceu

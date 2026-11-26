@@ -5,33 +5,40 @@ namespace SimBox.Train;
 
 /// <summary>
 /// Extrai um vetor de features normalizadas do estado do mundo + agente.
-/// Tamanho fixo para a rede neural.
+/// Tamanho fixo para a rede neural (FeatureCount é calculado a partir das listas abaixo).
 /// </summary>
 public static class FeatureExtractor
 {
-    // Índices importantes de itens para inventário (compacto)
-    static readonly Item[] TrackedItems =
+    // Itens do inventário que a rede enxerga (contagem/50, limitada a 1)
+    public static readonly Item[] TrackedItems =
     {
-        Wood, Stone, Ore, Sulfur, Scrap, Iron, Alloy,
-        Meat, CookedMeat, Orange, Tomato,
-        AxeBasic, AxeIron, PickBasic, PickIron,
-        Spear, Bow, Arrow, Pistol9, BulletLow,
-        Campfire, Workbench, Chest, Bandage,
-        Headscarf, Chapka, ArmorBear
+        // recursos e comida
+        Wood, Stone, Ore, Sulfur, Scrap, Iron, Alloy, Hide, Sinew, Fat,
+        Meat, CookedMeat, Orange, Tomato, Bandage,
+        // ferramentas (todas as famílias e níveis)
+        AxeBasic, AxeIron, AxeSulfur, PickBasic, PickIron, PickSulfur, Hammer, Sledge,
+        // armas e munição
+        Spear, Bow, Pistol9, DesertEagle, Shotgun, MP5, AK47, Sniper, Arrow, BulletLow, BulletHigh, Shell,
+        // construções colocáveis e vestimentas
+        Campfire, Workbench, ResearchTable, Chest, Smelter,
+        Headscarf, Chapka, ArmorBear, ArmorSmith
     };
 
-    // TrackedItems tem 27 itens — se mudar a lista, atualize este número
-    public const int FeatureCount =
+    // Recursos mais próximos: Árvore, Pedra, Ferro, Enxofre → dx, dy, dist (3 cada)
+    static readonly NodeKind[] NodeKinds = { NodeKind.Tree, NodeKind.Rock, NodeKind.IronOre, NodeKind.SulfurOre };
+
+    public static readonly int FeatureCount =
         8 +                         // status do agente
         2 +                         // dia/noite + progresso do ciclo
-        27 +                        // inventário (TrackedItems)
-        8 +                         // recursos próximos (dir + dist normalizada)
-        6 +                         // ghouls próximos
+        TrackedItems.Length +       // inventário
+        NodeKinds.Length * 3 +      // recursos próximos (dx, dy, dist) — antes faltava o Y
+        6 +                         // ghoul mais próximo
         4 +                         // construções / fogo
-        4 +                         // drops no chão
-        3 +                         // craft / research info
-        2;                          // time / level
-
+        4 +                         // drop mais próximo
+        3 +                         // craft / research
+        2 +                         // tempo de vida / xp
+        6 +                         // agente rival e colega mais próximos (dx, dy, dist)
+        2;                          // item selecionado (slot, tecnologia)
 
     public static float[] Extract(World w, Agent a)
     {
@@ -52,28 +59,23 @@ public static class FeatureExtractor
         f[i++] = w.IsDay ? 1f : 0f;
         f[i++] = w.TimeInCycle / w.Cfg.Cycle;
 
-        // --- Inventário (TrackedItems) ---
+        // --- Inventário ---
         foreach (var it in TrackedItems)
             f[i++] = Math.Clamp(a.Count(it) / 50f, 0f, 1f);
 
-        // --- Recursos mais próximos (4 tipos × 2 = 8) ---
-        // Árvore, Pedra, Ferro, Enxofre
-        EncodeNearestNode(w, a.Pos, NodeKind.Tree, f, ref i);
-        EncodeNearestNode(w, a.Pos, NodeKind.Rock, f, ref i);
-        EncodeNearestNode(w, a.Pos, NodeKind.IronOre, f, ref i);
-        EncodeNearestNode(w, a.Pos, NodeKind.SulfurOre, f, ref i);
+        // --- Recursos mais próximos (dx, dy, dist) ---
+        EncodeNearestNodes(w, a.Pos, f, ref i);
 
-        // --- Ghouls (6) ---
-        // mais próximo: dx, dy, dist, tipo normalizado + quantidade próxima + hostil?
+        // --- Ghoul mais próximo (6) ---
         EncodeNearestGhoul(w, a.Pos, f, ref i);
 
         // --- Construções / fogo (4) ---
         f[i++] = NearBuilding(w, a.Pos, Bld.Campfire) || NearBuilding(w, a.Pos, Bld.Abrasador) ? 1f : 0f;
-        f[i++] = NearLitFire(w, a.Pos) ? 1f : 0f;
+        f[i++] = w.NearLitFire(a.Pos) ? 1f : 0f;
         f[i++] = NearBuilding(w, a.Pos, Bld.Workbench) ? 1f : 0f;
         f[i++] = NearBuilding(w, a.Pos, Bld.Chest) ? 1f : 0f;
 
-        // --- Drops no chão (4) ---
+        // --- Drop mais próximo (4) ---
         EncodeNearestDrop(w, a.Pos, f, ref i);
 
         // --- Craft / Research (3) ---
@@ -84,34 +86,41 @@ public static class FeatureExtractor
             if (w.ResearchCheck(a, (Item)k) == null) canResearch++;
         f[i++] = Math.Clamp(canResearch / 10f, 0f, 1f);
 
-        // --- Tempo de vida e nível relativo (2) ---
-        f[i++] = Math.Clamp((w.Time - a.BornAt) / 960f, 0f, 5f); // em ciclos
+        // --- Tempo de vida e XP (2) ---
+        f[i++] = Math.Clamp((w.Time - a.BornAt) / (w.Cfg.Cycle * 5f), 0f, 5f);   // em ciclos/5 (antes usava 960 fixo, que não vale no treino)
         f[i++] = a.Xp / 5000f;
+
+        // --- Agentes: rival e colega mais próximos (6) ---
+        EncodeNearestAgent(w, a, enemy: true, f, ref i);
+        EncodeNearestAgent(w, a, enemy: false, f, ref i);
+
+        // --- Item selecionado (2): qual slot e que tecnologia ele tem ---
+        f[i++] = a.Slots.Length > 1 ? a.Selected / (float)(a.Slots.Length - 1) : 0f;
+        var sel = w.SelectedItem(a);
+        f[i++] = sel is Item si ? Defs.Tier(si) / 6f : 0f;
 
         return f;
     }
 
-    static void EncodeNearestNode(World w, Vector2 pos, NodeKind kind, float[] f, ref int i)
+    static void EncodeNearestNodes(World w, Vector2 pos, float[] f, ref int i)
     {
-        float best = float.MaxValue;
-        Vector2 bestPos = pos;
+        // uma única passada pelos nós, guardando o mais próximo de cada tipo
+        var best = new float[NodeKinds.Length]; var bestPos = new Vector2[NodeKinds.Length];
+        Array.Fill(best, float.MaxValue);
         foreach (var n in w.Nodes)
         {
-            if (!n.Alive || n.Kind != kind) continue;
+            if (!n.Alive) continue;
+            int k = Array.IndexOf(NodeKinds, n.Kind); if (k < 0) continue;
             float d = Vector2.DistanceSquared(n.Pos, pos);
-            if (d < best) { best = d; bestPos = n.Pos; }
+            if (d < best[k]) { best[k] = d; bestPos[k] = n.Pos; }
         }
-        if (best > 1e10f)
+        for (int k = 0; k < NodeKinds.Length; k++)
         {
-            f[i++] = 0f; f[i++] = 0f; // nada encontrado → direção zero + dist máxima
-        }
-        else
-        {
-            var dir = bestPos - pos;
-            float dist = MathF.Sqrt(best);
+            if (best[k] == float.MaxValue) { f[i++] = 0f; f[i++] = 0f; f[i++] = 1f; continue; }   // nada encontrado → longe (antes: dist 0 = "colado")
+            var dir = bestPos[k] - pos; float dist = MathF.Sqrt(best[k]);
             if (dist > 0.01f) dir /= dist;
-            f[i++] = dir.X;
-            f[i++] = Math.Clamp(dist / 1500f, 0f, 1f); // normalizado
+            f[i++] = dir.X; f[i++] = dir.Y;
+            f[i++] = Math.Clamp(dist / 1500f, 0f, 1f);
         }
     }
 
@@ -146,6 +155,21 @@ public static class FeatureExtractor
         }
     }
 
+    static void EncodeNearestAgent(World w, Agent me, bool enemy, float[] f, ref int i)
+    {
+        float best = float.MaxValue; Agent? near = null;
+        foreach (var o in w.Agents)
+        {
+            if (o == me || !o.Alive || (o.Team != me.Team) != enemy) continue;
+            float d = Vector2.DistanceSquared(o.Pos, me.Pos);
+            if (d < best) { best = d; near = o; }
+        }
+        if (near == null) { f[i++] = 0; f[i++] = 0; f[i++] = 1f; return; }
+        var dir = near.Pos - me.Pos; float dist = MathF.Sqrt(best);
+        if (dist > 0.01f) dir /= dist;
+        f[i++] = dir.X; f[i++] = dir.Y; f[i++] = Math.Clamp(dist / 2000f, 0f, 1f);
+    }
+
     static void EncodeNearestDrop(World w, Vector2 pos, float[] f, ref int i)
     {
         float best = float.MaxValue;
@@ -172,13 +196,5 @@ public static class FeatureExtractor
         }
     }
 
-    static bool NearBuilding(World w, Vector2 pos, Bld b)
-    {
-        return w.FindStation(pos, b, 280f) >= 0;
-    }
-
-    static bool NearLitFire(World w, Vector2 pos)
-    {
-        return w.NearLitFire(pos);
-    }
+    static bool NearBuilding(World w, Vector2 pos, Bld b) => w.FindStation(pos, b, 280f) >= 0;
 }

@@ -96,8 +96,9 @@ public sealed partial class World
         for (int i = Drops.Count - 1; i >= 0; i--)
         {
             var d = Drops[i]; if (Time < d.NoPick || Vector2.DistanceSquared(d.Pos, a.Pos) > Cfg.PickupRadius * Cfg.PickupRadius) continue;
+            int tf = Defs.ToolFamily(d.Item); if (tf >= 0 && !a.IsHuman && BestToolTier(a, tf) >= Defs.ToolTier(d.Item)) continue;     // bots só pegam ferramenta que melhora o que já têm
             int left = AddItem(a, d.Item, d.N);
-            if (left < d.N) { Say(a, $"+{d.N - left} {Defs.Name(d.Item)}"); Rewards[a.Id] += 0.01f; }
+            if (left < d.N) { Say(a, $"+{d.N - left} {Defs.Name(d.Item)}"); Rewards[a.Id] += 0.01f; if (tf >= 0 && !a.IsHuman) ToolObtained(a, d.Item, false); }
             if (left == 0) Drops.RemoveAt(i); else d.N = left;
         }
         if (inp.Attack) UseSelected(a, inp);
@@ -110,8 +111,22 @@ public sealed partial class World
         a.Hp -= dmg; a.LastHurt = Time; Rewards[a.Id] -= 0.002f * dmg;
         if (a.Hp <= 0) Die(a);
     }
+    /// <summary>Dano de um agente em outro com as regras de time: bônus por acerto/kill no rival (× tecnologia da arma), penalidade por fogo amigo e kill de amigo.</summary>
+    public void DamageAgentBy(Agent v, float dmg, Agent atk, Item weapon, bool melee)
+    {
+        if (!v.Alive || v == atk || dmg <= 0) return;
+        float before = v.Hp; HurtAgent(v, dmg, melee); float dealt = before - MathF.Max(0, v.Hp);
+        bool friend = v.Team == atk.Team; float m = Defs.TechMult(weapon);
+        if (friend) { atk.FriendDmg += dealt; Rewards[atk.Id] += Rw.HitFriend * dealt * m; }
+        else { atk.EnemyDmg += dealt; Rewards[atk.Id] += Rw.HitEnemy * dealt * m; }
+        if (v.Alive) return;
+        if (friend) { atk.FriendKills++; Rewards[atk.Id] += Rw.KillFriend; }
+        else { atk.EnemyKills++; Rewards[atk.Id] += Rw.KillEnemy; }
+        Trace?.Invoke($"{T()} A{atk.Id}(T{atk.Team}) matou {(friend ? "AMIGO" : "inimigo")} A{v.Id}(T{v.Team}) com {Defs.Name(weapon)}");
+    }
     void Die(Agent a)
     {
+        Trace?.Invoke($"{T()} A{a.Id}(T{a.Team}) morreu: {(a.Hunger <= 0 ? "fome" : a.Cold <= 0 ? "frio" : a.Rad > 128 ? "radiação" : "dano")}");
         a.Alive = false; a.Hp = 0; Deaths++; Rewards[a.Id] -= 3f; a.CraftLeft = 0; a.CraftRecipe = -1;
         for (int i = 0; i < a.Slots.Length; i++) if (a.Slots[i].N > 0) { DropAt(a.Pos, a.Slots[i].Item, a.Slots[i].N, 2f); a.Slots[i] = default; }
         Emit(8, a.Pos.X, a.Pos.Y, 0, 0, a.Id); Say(a, "Você morreu. Pressione o botão para renascer com metade do nível.");
@@ -229,6 +244,7 @@ public sealed partial class World
         if (!a.Alive) return "morto";
         if (!rec.BotOk && !a.IsHuman) return "bots não conseguem fabricar isto";
         if (a.CraftLeft > 0) return "já está fabricando algo";
+        if (!a.IsHuman && Defs.ToolFamily(rec.Out) >= 0 && BestToolTier(a, Defs.ToolFamily(rec.Out)) >= Defs.ToolTier(rec.Out)) return "já tem ferramenta igual ou melhor";
         if (!a.Unlocked[(int)rec.Out]) return "precisa pesquisar antes (tecla R)";
         if (rec.SkillPts == 0 && rec.Level > 1 && a.Level < rec.Level) return $"precisa de nível {rec.Level}";   // nível 1 = disponível desde o início
         if (rec.Station != Bld.None)
@@ -265,6 +281,43 @@ public sealed partial class World
         GiveOrDrop(a, rec.Out, rec.OutN);
         AddXp(a, 10 + 12 * rec.Level); Rewards[a.Id] += 0.05f;
         Say(a, $"Pronto: {Defs.Name(rec.Out)} x{rec.OutN}");
+        if (Defs.ToolFamily(rec.Out) >= 0) ToolObtained(a, rec.Out, true);
+    }
+
+    // ================================================================== ferramentas: bônus de fabricação, descarte e doação
+    public int BestToolTier(Agent a, int family)
+    {
+        int best = 0;
+        foreach (var t in Defs.AllTools) if (Defs.ToolFamily(t) == family && a.Has(t)) best = Math.Max(best, Defs.ToolTier(t));
+        return best;
+    }
+    /// <summary>Chamado ao fabricar (crafted=true) ou pegar do chão uma ferramenta. Fabricar paga o bônus grande (1x por item por agente por geração).
+    /// Em seguida, ferramentas inferiores da mesma família são doadas a um colega de time próximo que seja pior equipado (doador ganha bônus 1x por item) ou jogadas fora.</summary>
+    public void ToolObtained(Agent a, Item it, bool crafted)
+    {
+        if (crafted && !a.ToolPaid[(int)it])
+        {
+            a.ToolPaid[(int)it] = true; a.ToolsMade++; float b = Defs.ToolBonus(it); Rewards[a.Id] += b;
+            Trace?.Invoke($"{T()} A{a.Id}(T{a.Team}) fabricou {Defs.Name(it)} (+{b:0} bônus)");
+        }
+        int fam = Defs.ToolFamily(it), tier = Defs.ToolTier(it);
+        if (fam < 0 || !a.Has(it)) return;
+        foreach (var old in Defs.AllTools)
+        {
+            if (Defs.ToolFamily(old) != fam || Defs.ToolTier(old) >= tier || !a.Has(old)) continue;
+            int n = a.Count(old); RemoveItem(a, old, n);
+            Agent? to = null; float bd = Cfg.PickupRadius * 3; bd *= bd;
+            foreach (var o in Agents)
+            {
+                if (o == a || !o.Alive || o.Team != a.Team || BestToolTier(o, fam) >= Defs.ToolTier(old) || FreeSpace(o, old) <= 0) continue;
+                float d2 = Vector2.DistanceSquared(o.Pos, a.Pos); if (d2 < bd) { bd = d2; to = o; }
+            }
+            if (to == null) { DropAt(a.Pos, old, n, 4f); Trace?.Invoke($"{T()} A{a.Id}(T{a.Team}) jogou fora {Defs.Name(old)}"); continue; }
+            int left = AddItem(to, old, 1); if (n > 1 || left > 0) DropAt(a.Pos, old, n - 1 + left, 4f);
+            a.Donations++;
+            if (!a.DonatePaid[(int)old]) { a.DonatePaid[(int)old] = true; float b = Defs.ToolBonus(old) * Rw.DonateFactor; Rewards[a.Id] += b; Trace?.Invoke($"{T()} A{a.Id}(T{a.Team}) doou {Defs.Name(old)} para A{to.Id} (+{b:0} bônus)"); }
+            else Trace?.Invoke($"{T()} A{a.Id}(T{a.Team}) doou {Defs.Name(old)} para A{to.Id}");
+        }
     }
 
     // ================================================================== uso do item selecionado (botão de ataque)
@@ -311,7 +364,8 @@ public sealed partial class World
         var dir = new Vector2(MathF.Cos(a.Aim), MathF.Sin(a.Aim)); float reach = a.Radius + 62f, half = 1.1f;
         Emit(2, a.Pos.X, a.Pos.Y, a.Aim);
         bool hitSomething = false;
-        foreach (var g in Ghouls) if (g.Alive && InArc(a.Pos, dir, g.Pos, Defs.Ghouls[(int)g.Kind].Radius, reach, half)) { DamageGhoul(g, t.Dmg, a); hitSomething = true; }
+        foreach (var g in Ghouls) if (g.Alive && InArc(a.Pos, dir, g.Pos, Defs.Ghouls[(int)g.Kind].Radius, reach, half)) { DamageGhoul(g, t.Dmg, a, t.Item); hitSomething = true; }
+        foreach (var o in Agents) if (o.Alive && o != a && InArc(a.Pos, dir, o.Pos, o.Radius, reach, half)) { DamageAgentBy(o, t.Dmg, a, t.Item, true); hitSomething = true; }
         foreach (var an in Animals) if (an.Alive && InArc(a.Pos, dir, an.Pos, 24, reach, half)) { DamageAnimal(an, t.Dmg, a); hitSomething = true; }
         for (int i = Carcasses.Count - 1; i >= 0; i--)
         {

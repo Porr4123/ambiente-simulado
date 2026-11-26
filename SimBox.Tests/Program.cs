@@ -235,6 +235,42 @@ static class T
         Check(!a.Alive && w.Drops.Any(d2 => d2.Item == Wood), "morrer solta o inventário no chão");
         One(w, I(cmd: Cmd.Respawn)); Check(a.Alive && a.Level == lv / 2 && a.Count(Stone) == 2, $"renascer: metade do nível ({lv}→{a.Level}) [wiki]");
 
+        // ---------------- times, recompensas acumuladas e ferramentas (regras do treino)
+        w = Mk(null, 2); w.AccumulateRewards = true; a = w.Agents[0];
+        Run(w, 2f, I(), true); float racc = w.Rewards[0];
+        Check(racc > 0.02f, $"AccumulateRewards: reward acumula entre ticks ({racc:0.000})");
+        w.Reset(1); Check(w.Rewards[0] == 0 && w.Rewards[1] == 0, "Reset() zera o reward (nova geração)");
+        var wp = new World(Cfg(c => c.TeamSpawns = true), 4, 1, -1); for (int i = 0; i < 4; i++) wp.Agents[i].Team = i % 2; wp.Reset(1);
+        Check(wp.Agents[0].Pos.X < wp.W / 2 && wp.Agents[1].Pos.X > wp.W / 2 && Near(wp.Agents[0].Pos.X, wp.W * 0.25f, 400) && Near(wp.Agents[1].Pos.X, wp.W * 0.75f, 400), "TeamSpawns: time 0 à esquerda, time 1 à direita");
+
+        AgentInput Hit() => I(atk: true, aim: 0);
+        World Duel(int teamB, float hpB) { var d = Mk(null, 2); d.AccumulateRewards = true; d.Agents[0].Team = 0; d.Agents[1].Team = teamB; Place(d.Agents[1], 3050, 3000); d.Agents[1].Hp = hpB; return d; }
+        w = Duel(0, 255); var vb = w.Agents[1]; One(w, Hit());
+        Check(vb.Hp < 255 && w.Rewards[0] < 0 && w.Agents[0].FriendDmg > 0, $"fogo amigo: penalidade (reward {w.Rewards[0]:0.00}, dano {w.Agents[0].FriendDmg:0})");
+        w = Duel(0, 1); One(w, Hit());
+        Check(!w.Agents[1].Alive && w.Agents[0].FriendKills == 1 && w.Rewards[0] <= Rw.KillFriend + 1, $"matar amigo: penalidade severa (reward {w.Rewards[0]:0.0})");
+        w = Duel(1, 255); One(w, Hit());
+        Check(w.Agents[1].Hp < 255 && w.Rewards[0] > 0 && w.Agents[0].EnemyDmg > 0, $"fogo inimigo: bônus (reward {w.Rewards[0]:0.00})");
+        w = Duel(1, 1); One(w, Hit());
+        Check(!w.Agents[1].Alive && w.Agents[0].EnemyKills == 1 && w.Rewards[0] >= Rw.KillEnemy - 1, $"matar inimigo: bônus severo (reward {w.Rewards[0]:0.0})");
+        Check(Defs.TechMult(Wood) == 1f && Defs.TechMult(AxeBasic) < Defs.TechMult(AxeIron) && Defs.TechMult(AxeIron) < Defs.TechMult(Pistol9) && Defs.TechMult(Pistol9) < Defs.TechMult(AK47), "bônus de combate cresce com a tecnologia da arma");
+        w = Duel(1, 255); Give(w.Agents[0], Spear, 1, w); Select(w, Spear); One(w, I(atk: true, aim: 0, dist: 300)); Run(w, 1f, I());
+        Check(w.Agents[1].Hp < 255 && w.Rewards[0] > 0, $"projétil (lança) acerta agente rival ({w.Agents[1].Hp:0} hp)");
+        w = Duel(0, 255); Give(w.Agents[0], Spear, 1, w); Select(w, Spear); One(w, I(atk: true, aim: 0, dist: 300)); Run(w, 1f, I());
+        Check(w.Agents[1].Hp < 255 && w.Rewards[0] < 0, "projétil em colega: fogo amigo penalizado");
+
+        w = Duel(0, 255); a = w.Agents[0]; var mate = w.Agents[1];
+        Give(a, AxeBasic, 1, w); w.ToolObtained(a, AxeBasic, true);
+        Check(Near(w.Rewards[0], Defs.ToolBonus(AxeBasic), 0.01f) && a.ToolsMade == 1, "fabricar ferramenta: bônus grande");
+        w.ToolObtained(a, AxeBasic, true); Check(Near(w.Rewards[0], Defs.ToolBonus(AxeBasic), 0.01f), "mesma ferramenta: bônus só 1x por geração");
+        Give(a, AxeIron, 1, w); w.ToolObtained(a, AxeIron, true);
+        Check(!a.Has(AxeBasic) && mate.Has(AxeBasic) && a.Donations == 1, "ferramenta melhor: a anterior é doada ao colega pior equipado");
+        Check(Near(w.Rewards[0], Defs.ToolBonus(AxeBasic) + Defs.ToolBonus(AxeIron) + Defs.ToolBonus(AxeBasic) * Rw.DonateFactor, 0.01f), $"doador ganha bônus (reward {w.Rewards[0]:0.0})");
+        w = Duel(1, 255); a = w.Agents[0]; Give(a, AxeBasic, 1, w); Give(a, AxeIron, 1, w); w.ToolObtained(a, AxeIron, true);
+        Check(!a.Has(AxeBasic) && !w.Agents[1].Has(AxeBasic) && w.Drops.Any(d2 => d2.Item == AxeBasic), "sem colega por perto (outro time): joga a anterior fora");
+        w = Duel(0, 255); a = w.Agents[0]; Give(w.Agents[1], AxeIron, 1, w); Give(a, AxeBasic, 1, w); Give(a, AxeIron, 1, w); w.ToolObtained(a, AxeIron, true);
+        Check(!a.Has(AxeBasic) && !w.Agents[1].Has(AxeBasic) && Near(w.Rewards[0], Defs.ToolBonus(AxeIron), 0.01f), "colega já tem igual/melhor: não doa (joga fora) e não há bônus de doação");
+
         // ---------------- estresse
         var cfgS = Cfg(c => { c.DayLen = 30; c.NightLen = 30; c.Trees = 300; c.Rocks = 100; c.IronNodes = 40; c.SulfurNodes = 20; c.Crates = 20; c.Bushes = 40; c.Animals = 20; });
         var ws = new World(cfgS, 6, 5, -1); var rnd = new Random(2); var inp = new AgentInput[6];

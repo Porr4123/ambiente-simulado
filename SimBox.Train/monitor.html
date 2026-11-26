@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBox Monitor</title>
+<style>
+  :root { --bg:#0b0d10; --fg:#dfe6ee; --dim:#8b96a3; --t0:#3b82f6; --t1:#ef4444; --panel:rgba(14,17,22,.82); }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui,"Segoe UI",sans-serif; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; }
+  .panel { position:absolute; background:var(--panel); border:1px solid #2a323c; border-radius:8px; padding:8px 11px; backdrop-filter:blur(3px); }
+  #head { left:12px; top:12px; min-width:300px; }
+  #head b { font-size:15px; }
+  #side { right:12px; top:12px; min-width:230px; }
+  #log { left:12px; bottom:12px; max-width:min(720px,60vw); font:12px/1.35 ui-monospace,Consolas,monospace; color:var(--dim); }
+  #log div:last-child { color:var(--fg); }
+  #spark { right:12px; bottom:12px; padding:6px; }
+  .t0 { color:var(--t0); } .t1 { color:var(--t1); }
+  .chip { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .row { display:flex; justify-content:space-between; gap:14px; }
+  .bar { height:7px; background:#222a33; border-radius:4px; overflow:hidden; margin:2px 0 6px; }
+  .bar i { display:block; height:100%; }
+  .slot { display:flex; justify-content:space-between; padding:1px 6px; border-radius:4px; }
+  .slot.sel { background:#25405f; }
+  .slot.empty { color:#4b5560; }
+  h4 { margin:8px 0 3px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); }
+  #off { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.6); font-size:18px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="head" class="panel"></div>
+<div id="side" class="panel"></div>
+<div id="log" class="panel"></div>
+<canvas id="spark" class="panel" width="260" height="90" style="width:260px;height:90px"></canvas>
+<div id="off">Sem conexão com o treino…</div>
+<script>
+'use strict';
+const VIEW = location.pathname.startsWith('/focus') ? 'focus' : 'map';
+document.title = VIEW === 'focus' ? 'SimBox · Foco no top 1' : 'SimBox · Mapa';
+const cv = document.getElementById('c'), cx = cv.getContext('2d');
+const sp = document.getElementById('spark'), sx = sp.getContext('2d');
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const TEAM = ['#3b82f6', '#ef4444'], TEAMN = ['Time 0 (azul)', 'Time 1 (vermelho)'];
+const NODE = [ // kind: Tree, Rock, IronOre, SulfurOre, Crate, OrangeBush, TomatoBush  → [cor, raio]
+  ['#2f7d3a', 30], ['#7b8088', 38], ['#a0643c', 38], ['#d6c64a', 36], ['#b07a3c', 30], ['#e08a2e', 26], ['#d9453a', 26]];
+const GHOUL = [['#3fd35a', 26], ['#7be38c', 22], ['#a6e830', 22], ['#19b87a', 26], ['#0e7a3f', 44]]; // normal, rápido, explosivo, radioativo, blindado
+let S = null, nodes = [], nv = -1, lastOk = 0;
+const fmt = t => { t = Math.max(0, Math.round(t)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+
+function resize() { const r = devicePixelRatio || 1; cv.width = innerWidth * r; cv.height = innerHeight * r; }
+addEventListener('resize', resize); resize();
+if (VIEW === 'focus') { $('side').style.display = 'block'; $('spark').style.display = 'none'; }
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state?nv=' + nv, { cache: 'no-store' });
+    const j = await r.json();
+    if (j.nodes) nodes = j.nodes;
+    if (j.nv !== undefined) nv = j.nv;
+    if (j.ag) { S = j; lastOk = Date.now(); }
+  } catch (e) { /* servidor ocupado ou fechado */ }
+  $('off').style.display = Date.now() - lastOk > 4000 ? 'flex' : 'none';
+  setTimeout(poll, 100);
+}
+
+function headHtml() {
+  const a0 = S.ag.filter(a => a[1] === 0 && a[4]).length, a1 = S.ag.filter(a => a[1] === 1 && a[4]).length;
+  const n0 = S.ag.filter(a => a[1] === 0).length, n1 = S.ag.filter(a => a[1] === 1).length;
+  const sp = S.speed > 0 ? S.speed + '× tempo real' : 'velocidade máxima';
+  return `<div class="row"><b>Geração ${S.gen}</b><span>${S.weeks} semana(s)</span></div>
+    <div class="row"><span>${S.day ? '☀ dia' : '☾ noite'} ${S.dayn}</span><span>${fmt(S.t)} / ${fmt(S.tot)}${S.done ? ' · fim (todos morreram)' : ''}</span></div>
+    <div class="row"><span class="t0">● ${a0}/${n0} vivos</span><span class="t1">● ${a1}/${n1} vivos</span></div>
+    <div class="row"><span style="color:var(--dim)">ger. anterior: melhor ${S.best} · média ${S.avg}</span></div>
+    <div style="color:var(--dim)">${sp} · ${VIEW === 'focus' ? 'Foco' : 'Mapa'}</div>`;
+}
+
+function logHtml() { return S.log.map(l => `<div>${esc(l)}</div>`).join(''); }
+
+function spark() {
+  sx.clearRect(0, 0, 260, 90);
+  const h = S.hist; sx.fillStyle = '#8b96a3'; sx.font = '10px system-ui'; sx.fillText('fitness por geração', 6, 11);
+  if (h.length < 2) { sx.fillText(h.length ? 'melhor ' + h[0][1] : 'aguardando 1ª geração', 6, 50); return; }
+  let lo = Infinity, hi = -Infinity; for (const p of h) { lo = Math.min(lo, p[1], p[2]); hi = Math.max(hi, p[1], p[2]); }
+  if (hi - lo < 1) hi = lo + 1;
+  const X = i => 8 + i * 244 / (h.length - 1), Y = v => 80 - (v - lo) * 62 / (hi - lo);
+  for (const [k, col] of [[2, '#6b7684'], [1, '#4ade80']]) {
+    sx.strokeStyle = col; sx.lineWidth = 1.6; sx.beginPath();
+    h.forEach((p, i) => i ? sx.lineTo(X(i), Y(p[k])) : sx.moveTo(X(i), Y(p[k]))); sx.stroke();
+  }
+  sx.fillStyle = '#4ade80'; sx.fillText('melhor ' + h[h.length - 1][1], 150, 11);
+}
+
+// ------------------------------------------------------------------ MAPA
+function drawMap() {
+  const w = cv.width, h = cv.height, m = 16 * (devicePixelRatio || 1);
+  const sc = Math.min((w - 2 * m) / S.W, (h - 2 * m) / S.H);
+  const ox = (w - S.W * sc) / 2, oy = (h - S.H * sc) / 2, r = devicePixelRatio || 1;
+  cx.fillStyle = S.day ? '#141a21' : '#080a0e'; cx.fillRect(0, 0, w, h);
+  cx.fillStyle = S.day ? '#1b232c' : '#0d1117'; cx.fillRect(ox, oy, S.W * sc, S.H * sc);
+  cx.strokeStyle = '#2f3a46'; cx.lineWidth = 1; cx.strokeRect(ox, oy, S.W * sc, S.H * sc);
+  cx.fillStyle = '#e8c547';                                   // recursos: pontos amarelos
+  for (const n of nodes) { cx.beginPath(); cx.arc(ox + n[0] * sc, oy + n[1] * sc, 1.8 * r, 0, 6.2832); cx.fill(); }
+  cx.fillStyle = '#8a8f98';                                   // construções: quadrados cinza
+  const cs = Math.max(S.cell * sc, 4 * r);
+  for (const b of S.bl) cx.fillRect(ox + b[0] * S.cell * sc, oy + b[1] * S.cell * sc, cs, cs);
+  cx.fillStyle = '#3fd35a';                                   // inimigos: pontos verdes
+  for (const g of S.gh) { cx.beginPath(); cx.arc(ox + g[0] * sc, oy + g[1] * sc, 2.6 * r, 0, 6.2832); cx.fill(); }
+  const fid = S.foc.id;
+  for (const a of S.ag) {                                     // agentes: azul / vermelho
+    const x = ox + a[2] * sc, y = oy + a[3] * sc;
+    if (!a[4]) { cx.strokeStyle = '#59616b'; cx.lineWidth = 1.2 * r; cx.beginPath(); cx.moveTo(x - 3 * r, y - 3 * r); cx.lineTo(x + 3 * r, y + 3 * r); cx.moveTo(x + 3 * r, y - 3 * r); cx.lineTo(x - 3 * r, y + 3 * r); cx.stroke(); continue; }
+    cx.fillStyle = TEAM[a[1]]; cx.beginPath(); cx.arc(x, y, 4.5 * r, 0, 6.2832); cx.fill();
+    if (a[0] === fid) { cx.strokeStyle = '#fff'; cx.lineWidth = 2 * r; cx.beginPath(); cx.arc(x, y, 9 * r, 0, 6.2832); cx.stroke(); }
+  }
+  const top = [...S.ag].sort((p, q) => q[5] - p[5]).slice(0, 8);
+  $('side').style.display = 'block';
+  $('side').innerHTML = '<h4 style="margin-top:0">Top 8 agora (fitness parcial)</h4>' + top.map((a, i) =>
+    `<div class="row"><span><span class="chip" style="background:${TEAM[a[1]]}"></span>${i + 1}. A${a[0]}${a[4] ? '' : ' ✝'}</span><span>nív ${a[6]}</span><b>${a[5]}</b></div>`).join('') +
+    `<h4>Placar da geração anterior</h4><div class="row"><span class="t0">Time 0</span><b>${S.sc0}</b></div><div class="row"><span class="t1">Time 1</span><b>${S.sc1}</b></div>
+     <h4>Legenda</h4><div style="color:var(--dim)"><span class="chip" style="background:#3b82f6"></span>time 0 <span class="chip" style="background:#ef4444;margin-left:8px"></span>time 1<br>
+     <span class="chip" style="background:#e8c547"></span>recursos <span class="chip" style="background:#8a8f98;border-radius:2px;margin-left:8px"></span>construções<br>
+     <span class="chip" style="background:#3fd35a"></span>inimigos (ghouls) · ✕ morto · ◯ foco</div>`;
+}
+
+// ------------------------------------------------------------------ FOCO (top 1)
+function drawFocus() {
+  const F = S.foc, r = devicePixelRatio || 1, w = cv.width, h = cv.height;
+  const sc = Math.max(w / 1700, h / 1100) * 0.98;            // ~1700×1100 unidades visíveis
+  const X = x => w / 2 + (x - F.x) * sc, Y = y => h / 2 + (y - F.y) * sc;
+  cx.fillStyle = S.day ? '#26331f' : '#10160f'; cx.fillRect(0, 0, w, h);
+  cx.strokeStyle = S.day ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.035)'; cx.lineWidth = 1;
+  const g0 = Math.floor((F.x - w / 2 / sc) / 500) * 500, g1 = F.x + w / 2 / sc;
+  for (let gx = g0; gx < g1; gx += 500) { cx.beginPath(); cx.moveTo(X(gx), 0); cx.lineTo(X(gx), h); cx.stroke(); }
+  const k0 = Math.floor((F.y - h / 2 / sc) / 500) * 500, k1 = F.y + h / 2 / sc;
+  for (let gy = k0; gy < k1; gy += 500) { cx.beginPath(); cx.moveTo(0, Y(gy)); cx.lineTo(w, Y(gy)); cx.stroke(); }
+  cx.strokeStyle = '#6a7684'; cx.lineWidth = 3 * r; cx.strokeRect(X(0), Y(0), S.W * sc, S.H * sc);   // borda do mundo
+  const vis = (x, y, rad) => X(x) > -rad * sc && X(x) < w + rad * sc && Y(y) > -rad * sc && Y(y) < h + rad * sc;
+  for (const b of S.bl) {                                      // construções
+    const x = b[0] * S.cell, y = b[1] * S.cell; if (!vis(x, y, S.cell)) continue;
+    cx.fillStyle = '#8a8f98'; cx.fillRect(X(x), Y(y), S.cell * sc, S.cell * sc);
+    cx.strokeStyle = '#4b5057'; cx.lineWidth = 1.5 * r; cx.strokeRect(X(x), Y(y), S.cell * sc, S.cell * sc);
+  }
+  for (const n of nodes) {                                     // recursos
+    const d = NODE[n[2]] || NODE[0]; if (!vis(n[0], n[1], d[1])) continue;
+    cx.fillStyle = d[0]; cx.beginPath(); cx.arc(X(n[0]), Y(n[1]), d[1] * sc, 0, 6.2832); cx.fill();
+  }
+  cx.fillStyle = '#d8d8d8';
+  for (const d of S.dr) { if (!vis(d[0], d[1], 20)) continue; cx.beginPath(); cx.arc(X(d[0]), Y(d[1]), 8 * sc, 0, 6.2832); cx.fill(); }
+  for (const g of S.gh) {                                      // ghouls
+    const d = GHOUL[g[2]] || GHOUL[0]; if (!vis(g[0], g[1], d[1])) continue;
+    cx.fillStyle = d[0]; cx.beginPath(); cx.arc(X(g[0]), Y(g[1]), d[1] * sc, 0, 6.2832); cx.fill();
+    cx.strokeStyle = '#0a3a18'; cx.lineWidth = 2 * r; cx.stroke();
+  }
+  cx.fillStyle = '#fff';
+  for (const p of S.pr) { if (!vis(p[0], p[1], 10)) continue; cx.beginPath(); cx.arc(X(p[0]), Y(p[1]), 5 * sc, 0, 6.2832); cx.fill(); }
+  for (const a of S.ag) {                                      // agentes
+    if (!vis(a[2], a[3], 40)) continue; const foc = a[0] === F.id;
+    cx.globalAlpha = a[4] ? 1 : .35; cx.fillStyle = TEAM[a[1]];
+    cx.beginPath(); cx.arc(X(a[2]), Y(a[3]), 30 * sc, 0, 6.2832); cx.fill(); cx.globalAlpha = 1;
+    cx.strokeStyle = foc ? '#fff' : '#000'; cx.lineWidth = (foc ? 3 : 1.5) * r; cx.stroke();
+    cx.fillStyle = '#fff'; cx.font = (11 * r) + 'px system-ui'; cx.textAlign = 'center'; cx.fillText('A' + a[0], X(a[2]), Y(a[3]) - 36 * sc);
+  }
+  if (F.alive) {                                               // mira do foco
+    cx.strokeStyle = '#fff'; cx.lineWidth = 2 * r; cx.beginPath(); cx.moveTo(w / 2, h / 2);
+    cx.lineTo(w / 2 + Math.cos(F.aim) * 95 * sc, h / 2 + Math.sin(F.aim) * 95 * sc); cx.stroke();
+  }
+  if (!S.day) { cx.fillStyle = 'rgba(5,8,40,.28)'; cx.fillRect(0, 0, w, h); }
+  cx.textAlign = 'start';
+
+  const bar = (n, v, c) => `<div class="row"><span>${n}</span><span>${v}</span></div><div class="bar"><i style="width:${Math.max(0, Math.min(100, v / F.max * 100))}%;background:${c}"></i></div>`;
+  const slots = F.slots.map((s, i) => s.length ? `<div class="slot${i === F.sel ? ' sel' : ''}"><span>${esc(s[0])}</span><b>${s[1]}</b></div>` : `<div class="slot empty${i === F.sel ? ' sel' : ''}"><span>—</span></div>`).join('');
+  const craft = F.craft ? `<div class="row"><span>Fabricando ${esc(F.craft[0])}</span><span>${F.craft[1]}s</span></div><div class="bar"><i style="width:${(1 - F.craft[1] / Math.max(.1, F.craft[2])) * 100}%;background:#f59e0b"></i></div>` : '';
+  const mine = S.log.filter(l => l.includes('A' + F.id + '(')).slice(-5).map(l => `<div style="color:var(--dim);font:11px ui-monospace,Consolas,monospace">${esc(l)}</div>`).join('');
+  $('side').innerHTML = `<div class="row"><b style="font-size:15px"><span class="chip" style="background:${TEAM[F.team]}"></span>Top 1 agora: A${F.id}</b><span>${F.alive ? '' : '✝ morto'}</span></div>
+    <div class="row"><span>fitness parcial</span><b>${F.score}</b></div><div class="row"><span>reward da geração</span><span>${F.rew}</span></div>
+    <div class="row"><span>nível ${F.lvl}</span><span>ghouls ${F.kills} · inimigos ${F.ek} · amigos ${F.fk}</span></div>
+    <div class="row"><span>dano inimigo ${F.edmg}</span><span>fogo amigo ${F.fdmg}</span></div>
+    <div class="row"><span>ferramentas ${F.tools}</span><span>doações ${F.don}</span></div>
+    <h4>Status</h4>${bar('Vida', F.hp, '#ef4444')}${bar('Fome', F.hu, '#f59e0b')}${bar('Frio', F.co, '#38bdf8')}${bar('Stamina', F.st, '#4ade80')}
+    <h4>Decisão da rede</h4><div class="row"><span>comando</span><b>${F.in.cmd}</b></div>
+    <div class="row"><span>mover</span><span>${F.in.mx}, ${F.in.my}${F.in.spr ? ' · corre' : ''}</span></div>
+    <div class="row"><span>ataque</span><span>${F.in.atk ? 'SIM' : 'não'} · ${esc(F.wpn)} (tec. ${F.tier})</span></div>${craft}
+    <h4>Inventário</h4>${slots}<h4>Eventos do agente</h4>${mine || '<div style="color:var(--dim)">—</div>'}`;
+}
+
+function frame() {
+  if (S) {
+    $('head').innerHTML = headHtml(); $('log').innerHTML = logHtml();
+    if (VIEW === 'map') { drawMap(); spark(); } else drawFocus();
+  }
+  requestAnimationFrame(() => setTimeout(frame, 60));
+}
+poll(); frame();
+</script>
+</body>
+</html>

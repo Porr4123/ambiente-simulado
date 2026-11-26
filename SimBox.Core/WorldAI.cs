@@ -74,19 +74,20 @@ public sealed partial class World
         Ghouls.RemoveAll(g => !g.Alive);
     }
 
-    public void DamageGhoul(Ghoul g, float dmg, Agent? src)
+    public void DamageGhoul(Ghoul g, float dmg, Agent? src, Item weapon = Wood)
     {
         if (!g.Alive) return;
+        if (src != null) Rewards[src.Id] += Rw.HitGhoul * MathF.Min(dmg, MathF.Max(0, g.Hp)) * Defs.TechMult(weapon);   // bônus de combate cresce com a tecnologia da arma
         g.Hp -= dmg; g.Hostile = true; Emit(3, g.Pos.X, g.Pos.Y);
-        if (g.Hp <= 0) KillGhoul(g, src);
+        if (g.Hp <= 0) KillGhoul(g, src, weapon);
     }
 
-    void KillGhoul(Ghoul g, Agent? src)
+    void KillGhoul(Ghoul g, Agent? src, Item weapon = Wood)
     {
         if (!g.Alive) return; g.Alive = false; KillsByKind[(int)g.Kind]++;
         var d = Defs.Ghouls[(int)g.Kind];
         Emit(7, g.Pos.X, g.Pos.Y, 0, 0, (int)g.Kind);
-        if (src != null) { src.Kills++; AddXp(src, d.Xp); Rewards[src.Id] += 0.3f + 0.1f * (int)g.Kind; Say(src, $"{d.Name} abatido (+{d.Xp} XP)."); }
+        if (src != null) { src.Kills++; AddXp(src, d.Xp); Rewards[src.Id] += (Rw.KillGhoulBase + Rw.KillGhoulPerKind * (int)g.Kind) * Defs.TechMult(weapon); Say(src, $"{d.Name} abatido (+{d.Xp} XP)."); }
         switch (g.Kind)   // [wiki] drops
         {
             case GhoulKind.Normal: DropAt(g.Pos, Fat, 1, 0); break;
@@ -207,7 +208,11 @@ public sealed partial class World
                 var np = p.Pos + p.Dir * (travel * s / steps);
                 Agent? owner = !p.FromRobot && p.OwnerId >= 0 && p.OwnerId < Agents.Length ? Agents[p.OwnerId] : null;
                 foreach (var g in Ghouls)
-                    if (g.Alive && Vector2.DistanceSquared(np, g.Pos) <= MathF.Pow(Defs.Ghouls[(int)g.Kind].Radius + 6, 2)) { DamageGhoul(g, p.Dmg, owner); dead = true; break; }
+                    if (g.Alive && Vector2.DistanceSquared(np, g.Pos) <= MathF.Pow(Defs.Ghouls[(int)g.Kind].Radius + 6, 2)) { DamageGhoul(g, p.Dmg, owner, p.Kind); dead = true; break; }
+                if (dead) break;
+                foreach (var o in Agents)      // tiro/flecha/lança também acerta agentes (fogo amigo incluso); o dono nunca se acerta
+                    if (o.Alive && o.Id != p.OwnerId && Vector2.DistanceSquared(np, o.Pos) <= (o.Radius + 6) * (o.Radius + 6))
+                    { if (owner != null) DamageAgentBy(o, p.Dmg, owner, p.Kind, false); else HurtAgent(o, p.Dmg, false); dead = true; break; }
                 if (dead) break;
                 foreach (var an in Animals) if (an.Alive && Vector2.DistanceSquared(np, an.Pos) <= 28f * 28f) { DamageAnimal(an, p.Dmg, owner); dead = true; break; }
                 if (dead) break;

@@ -159,6 +159,45 @@ public static class Defs
     public static readonly float[] ArmorReduction = { 0f, 0.25f, 0.45f, 0.65f };               // corpo a corpo níveis 0..3 [chute]
     public static float ColdRate(Item worn) => 3.5f;
 
+    // ---- tecnologia (para bônus de combate) e ferramentas (para bônus de fabricação)
+    /// <summary>Nível tecnológico 1..6 da arma/ferramenta usada. A mão e qualquer outro item valem 1.</summary>
+    public static int Tier(Item i) => i switch
+    {
+        Hammer or AxeIron or PickIron or Spear or Bow => 2,
+        Sledge or AxeSulfur or PickSulfur or Pistol9 => 3,
+        DesertEagle or Shotgun => 4,
+        SawedOff or MP5 => 5,
+        AK47 or Sniper => 6,
+        _ => 1
+    };
+    /// <summary>Multiplicador de recompensa de combate: 1.0 (mão) até 3.5 (AK-47/sniper).</summary>
+    public static float TechMult(Item i) => 1f + 0.5f * (Tier(i) - 1);
+    /// <summary>Família da ferramenta (0 machado, 1 picareta, 2 martelo, 3 marreta) ou -1.</summary>
+    public static int ToolFamily(Item i) => i switch
+    {
+        AxeBasic or AxeIron or AxeSulfur => 0,
+        PickBasic or PickIron or PickSulfur => 1,
+        Hammer => 2,
+        Sledge => 3,
+        _ => -1
+    };
+    public static int ToolTier(Item i) => i switch
+    {
+        AxeBasic or PickBasic or Hammer or Sledge => 1,
+        AxeIron or PickIron => 2,
+        AxeSulfur or PickSulfur => 3,
+        _ => 0
+    };
+    public static readonly Item[] AllTools = { AxeBasic, AxeIron, AxeSulfur, PickBasic, PickIron, PickSulfur, Hammer, Sledge };
+    /// <summary>Bônus (1x por geração por agente) ao fabricar a ferramenta.</summary>
+    public static float ToolBonus(Item i) => i switch
+    {
+        AxeBasic or PickBasic => 10f,
+        AxeIron or PickIron or Hammer => 25f,
+        AxeSulfur or PickSulfur or Sledge => 50f,
+        _ => 0f
+    };
+
     // ---- XP: [wiki] 450, 950, 1450 nos 3 primeiros níveis; depois cresce ~160 por nível (≈26k no nível 20) [aproximação]
     public static int XpFor(int level)
     {
@@ -252,8 +291,22 @@ public static class Defs
     };
 }
 
+/// <summary>Valores das recompensas de combate e de equipe (ajuste aqui). Positivo = bônus, negativo = penalidade.</summary>
+public static class Rw
+{
+    public const float HitEnemy = 0.05f;        // por ponto de dano em agente do time rival (× TechMult da arma)
+    public const float KillEnemy = 80f;         // matar agente do time rival (bônus severo)
+    public const float HitFriend = -0.08f;      // por ponto de dano em colega de time (× TechMult) = fogo amigo
+    public const float KillFriend = -150f;      // matar colega de time (penalidade severa)
+    public const float HitGhoul = 0.01f;        // por ponto de dano em ghoul (× TechMult)
+    public const float KillGhoulBase = 2f, KillGhoulPerKind = 1.5f;   // (base + por tipo) × TechMult
+    public const float DonateFactor = 0.5f;     // doador ganha ToolBonus(item doado) × fator
+}
+
 public sealed class SimConfig
 {
+    public float TeamSpawnSpacing = 220f;                   // distância entre agentes do mesmo time no spawn (evita fogo amigo por amontoamento)
+    public bool TeamSpawns;                                 // treino: time 0 nasce à esquerda e time 1 à direita (senão: grupo no centro)
     public int Tps = 30;
     public float WorldW = 6000, WorldH = 6000, Cell = 100;
     public float DayLen = 480, NightLen = 480;              // [wiki] 1 dia = 1 noite = 8 min

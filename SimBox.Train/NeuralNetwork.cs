@@ -22,14 +22,16 @@ public sealed class NeuralNetwork
         }
     }
 
-    public NeuralNetwork(int[] layers)
+    public NeuralNetwork(int[] layers, Random? rng = null) : this(layers, true, rng) { }
+
+    NeuralNetwork(int[] layers, bool init, Random? rng)
     {
         Layers = (int[])layers.Clone();
         Weights = new float[layers.Length][];
         Biases = new float[layers.Length][];
         Activations = new float[layers.Length][];
 
-        var rng = new Random();
+        rng ??= new Random();
         for (int l = 0; l < layers.Length; l++)
         {
             Activations[l] = new float[layers[l]];
@@ -39,6 +41,7 @@ public sealed class NeuralNetwork
             int cur = layers[l];
             Weights[l] = new float[cur * prev];
             Biases[l] = new float[cur];
+            if (!init) continue;
 
             // Xavier-ish init
             float scale = MathF.Sqrt(2f / (prev + cur));
@@ -51,12 +54,37 @@ public sealed class NeuralNetwork
 
     public NeuralNetwork Clone()
     {
-        var nn = new NeuralNetwork(Layers);
+        var nn = new NeuralNetwork(Layers, false, null);   // sem sortear pesos à toa
         for (int l = 1; l < Layers.Length; l++)
         {
             Array.Copy(Weights[l], nn.Weights[l], Weights[l].Length);
             Array.Copy(Biases[l], nn.Biases[l], Biases[l].Length);
         }
+        return nn;
+    }
+
+    // ---- persistência (binário: nº de camadas, tamanhos, genoma float32)
+    public void Write(BinaryWriter bw)
+    {
+        bw.Write(Layers.Length);
+        foreach (var l in Layers) bw.Write(l);
+        var g = GetGenome();
+        bw.Write(g.Length);
+        foreach (var x in g) bw.Write(x);
+    }
+
+    public static NeuralNetwork Read(BinaryReader br)
+    {
+        int n = br.ReadInt32();
+        if (n < 2 || n > 16) throw new InvalidDataException("arquivo de cérebro inválido");
+        var layers = new int[n];
+        for (int i = 0; i < n; i++) layers[i] = br.ReadInt32();
+        var nn = new NeuralNetwork(layers, false, null);
+        int len = br.ReadInt32();
+        if (len != nn.TotalWeights) throw new InvalidDataException("tamanho do genoma não confere com as camadas");
+        var g = new float[len];
+        for (int i = 0; i < len; i++) g[i] = br.ReadSingle();
+        nn.SetGenome(g);
         return nn;
     }
 

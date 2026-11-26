@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SimBox.Core\SimBox.Core.csproj" />
+    <EmbeddedResource Include="monitor.html" LogicalName="monitor.html" />
   </ItemGroup>
 </Project>

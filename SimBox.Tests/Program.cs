@@ -243,6 +243,12 @@ static class T
         var wp = new World(Cfg(c => c.TeamSpawns = true), 4, 1, -1); for (int i = 0; i < 4; i++) wp.Agents[i].Team = i % 2; wp.Reset(1);
         Check(wp.Agents[0].Pos.X < wp.W / 2 && wp.Agents[1].Pos.X > wp.W / 2 && Near(wp.Agents[0].Pos.X, wp.W * 0.25f, 400) && Near(wp.Agents[1].Pos.X, wp.W * 0.75f, 400), "TeamSpawns: time 0 à esquerda, time 1 à direita");
 
+        // 32 agentes por time: spawn em grade, cada time do seu lado do muro, sem sobreposição e sem recursos em cima dos agentes
+        var wq = new World(Cfg(c => { c.TeamSpawns = true; c.TeamWall = true; c.Trees = 400; c.Rocks = 150; }), 64, 1, -1); for (int i = 0; i < 64; i++) wq.Agents[i].Team = i % 2; wq.Reset(1);
+        float minD = float.MaxValue; for (int i = 0; i < 64; i++) for (int j = i + 1; j < 64; j++) minD = MathF.Min(minD, Vector2.Distance(wq.Agents[i].Pos, wq.Agents[j].Pos));
+        Check(wq.Agents.All(ag => (ag.Team == 0) == (ag.Pos.X < wq.W / 2 - 100)) && minD >= 200, $"spawn de 32+32: cada time do seu lado do muro, distância mínima {minD:0}");
+        Check(!wq.Nodes.Any(n => wq.Agents.Any(ag => Vector2.Distance(n.Pos, ag.Pos) < n.R + ag.Radius)), "spawn de 32+32: nenhum recurso nasce em cima de um agente");
+
         AgentInput Hit() => I(atk: true, aim: 0);
         World Duel(int teamB, float hpB) { var d = Mk(null, 2); d.AccumulateRewards = true; d.Agents[0].Team = 0; d.Agents[1].Team = teamB; Place(d.Agents[1], 3050, 3000); d.Agents[1].Hp = hpB; return d; }
         w = Duel(0, 255); var vb = w.Agents[1]; One(w, Hit());

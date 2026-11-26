@@ -84,6 +84,7 @@ public sealed class AgentBrain
         if (br.ReadInt32() != 1) throw new InvalidDataException($"{path}: versão desconhecida");
         int team = br.ReadInt32(); float fit = br.ReadSingle();
         var net = NeuralNetwork.Read(br);
+        if (net.Layers[0] == FeatureExtractor.LegacyFeatureCount && FeatureExtractor.FeatureCount > net.Layers[0]) net = net.WithInputSize(FeatureExtractor.FeatureCount);   // cérebro da versão sem obstáculos: migra
         if (net.Layers[0] != FeatureExtractor.FeatureCount || net.Layers[^1] != OutputSize)
             throw new InvalidDataException($"{path}: rede com {net.Layers[0]} entradas, mas as features atuais são {FeatureExtractor.FeatureCount} (cérebro de versão antiga)");
         return new AgentBrain(net, team) { Fitness = fit };

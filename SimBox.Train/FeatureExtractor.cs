@@ -27,6 +27,10 @@ public static class FeatureExtractor
     // Recursos mais próximos: Árvore, Pedra, Ferro, Enxofre → dx, dy, dist (3 cada)
     static readonly NodeKind[] NodeKinds = { NodeKind.Tree, NodeKind.Rock, NodeKind.IronOre, NodeKind.SulfurOre };
 
+    /// <summary>Nº de entradas da versão anterior (antes dos obstáculos). Cérebros salvos com esse tamanho são migrados ao carregar:
+    /// as entradas novas ficam no FIM do vetor e entram com peso 0, então a rede se comporta exatamente como antes.</summary>
+    public const int LegacyFeatureCount = 93;
+
     public static readonly int FeatureCount =
         8 +                         // status do agente
         2 +                         // dia/noite + progresso do ciclo
@@ -38,7 +42,8 @@ public static class FeatureExtractor
         3 +                         // craft / research
         2 +                         // tempo de vida / xp
         6 +                         // agente rival e colega mais próximos (dx, dy, dist)
-        2;                          // item selecionado (slot, tecnologia)
+        2 +                         // item selecionado (slot, tecnologia)
+        6;                          // obstáculos: construção sólida mais próxima + muro do meio (dx, dy, dist)
 
     public static float[] Extract(World w, Agent a)
     {
@@ -99,7 +104,39 @@ public static class FeatureExtractor
         var sel = w.SelectedItem(a);
         f[i++] = sel is Item si ? Defs.Tier(si) / 6f : 0f;
 
+        // --- Obstáculos (6): muros e outras construções sólidas, no mesmo formato dos recursos (dx, dy, dist; "nada por perto" = 0, 0, 1) ---
+        EncodeNearestSolidBuilding(w, a.Pos, f, ref i);
+        EncodeTeamWall(w, a.Pos, f, ref i);
+
         return f;
+    }
+
+    /// <summary>Construção sólida (muro, portão, estação, baú...) mais próxima numa janela de 8 células: direção até o ponto mais perto dela e distância.</summary>
+    static void EncodeNearestSolidBuilding(World w, Vector2 pos, float[] f, ref int i)
+    {
+        const int R = 8; float cell = w.Cfg.Cell;
+        int cx = (int)MathF.Floor(pos.X / cell), cy = (int)MathF.Floor(pos.Y / cell);
+        float best = float.MaxValue; var bp = pos;
+        for (int gy = Math.Max(0, cy - R); gy <= Math.Min(w.GH - 1, cy + R); gy++)
+            for (int gx = Math.Max(0, cx - R); gx <= Math.Min(w.GW - 1, cx + R); gx++)
+            {
+                byte b = w.BldGrid[gy * w.GW + gx]; if (b == 0 || !Defs.Blds[b].SolidAgent) continue;
+                float rx = gx * cell, ry = gy * cell;
+                var np = new Vector2(Math.Clamp(pos.X, rx, rx + cell), Math.Clamp(pos.Y, ry, ry + cell));
+                float d = Vector2.DistanceSquared(np, pos); if (d < best) { best = d; bp = np; }
+            }
+        if (best == float.MaxValue) { f[i++] = 0f; f[i++] = 0f; f[i++] = 1f; return; }
+        float dist = MathF.Sqrt(best); var dir = dist > 0.01f ? (bp - pos) / dist : Vector2.Zero;
+        f[i++] = dir.X; f[i++] = dir.Y; f[i++] = Math.Clamp(dist / (R * cell), 0f, 1f);
+    }
+
+    /// <summary>Muro vertical do meio (só enquanto existe): direção (±1, 0) até a face mais próxima e distância. Depois que cai, volta a "nada por perto".</summary>
+    static void EncodeTeamWall(World w, Vector2 pos, float[] f, ref int i)
+    {
+        if (!w.WallActive) { f[i++] = 0f; f[i++] = 0f; f[i++] = 1f; return; }
+        float half = w.Cfg.Cell / 2, mid = w.W / 2;
+        float dx = pos.X < mid ? (mid - half) - pos.X : (mid + half) - pos.X;      // até a face do lado em que o agente está
+        f[i++] = dx >= 0 ? 1f : -1f; f[i++] = 0f; f[i++] = Math.Clamp(MathF.Abs(dx) / 1500f, 0f, 1f);
     }
 
     static void EncodeNearestNodes(World w, Vector2 pos, float[] f, ref int i)

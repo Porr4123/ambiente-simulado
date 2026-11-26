@@ -63,6 +63,22 @@ public sealed class NeuralNetwork
         return nn;
     }
 
+    /// <summary>Cópia com a camada de entrada ampliada. As entradas novas (no fim do vetor) entram com peso 0: a rede responde igual à original.</summary>
+    public NeuralNetwork WithInputSize(int newIn)
+    {
+        if (newIn < Layers[0]) throw new ArgumentException("só dá para ampliar a entrada");
+        var layers = (int[])Layers.Clone(); layers[0] = newIn;
+        var nn = new NeuralNetwork(layers, false, null);
+        int oldIn = Layers[0], cur = Layers[1];
+        for (int j = 0; j < cur; j++) Array.Copy(Weights[1], j * oldIn, nn.Weights[1], j * newIn, oldIn);
+        for (int l = 1; l < Layers.Length; l++)
+        {
+            if (l > 1) Array.Copy(Weights[l], nn.Weights[l], Weights[l].Length);
+            Array.Copy(Biases[l], nn.Biases[l], Biases[l].Length);
+        }
+        return nn;
+    }
+
     // ---- persistência (binário: nº de camadas, tamanhos, genoma float32)
     public void Write(BinaryWriter bw)
     {

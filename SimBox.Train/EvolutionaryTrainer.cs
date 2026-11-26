@@ -36,6 +36,9 @@ public sealed class EvolutionaryTrainer
     public volatile float Speed;
     /// <summary>Ctrl+S no console: o treino para ao fim da geração em curso.</summary>
     public volatile bool StopRequested;
+    /// <summary>true = 1 núcleo para o mundo + 1 núcleo para cada time decidindo em paralelo (<see cref="DecisionPool"/>); false = tudo serial numa thread só.
+    /// Por padrão liga com 3+ núcleos lógicos (mundo + 2 times).</summary>
+    public bool ParallelTeams = Environment.ProcessorCount >= 3;
     /// <summary>2º Ctrl+S: encerra a geração em curso agora (ela ainda é avaliada e gravada).</summary>
     public volatile bool EndNow;
     public RunLogger? Logger;
@@ -129,6 +132,14 @@ public sealed class EvolutionaryTrainer
         };
 
         var inputs = new AgentInput[PopulationSize];
+        DecisionPool? pool = null;
+        if (ParallelTeams)
+        {
+            var byTeam = new[] { new List<int>(), new List<int>() };
+            for (int i = 0; i < PopulationSize; i++) byTeam[world.Agents[i].Team & 1].Add(i);
+            pool = new DecisionPool(byTeam.Select(l => l.ToArray()).ToArray(), i => inputs[i] = Population[i].Decide(world, world.Agents[i]));
+        }
+        try {
         int totalTicks = (int)(simSeconds * cfg.Tps);
         int decideEvery = 2;                // rede só pensa a cada 2 ticks
         int progressEvery = Math.Max(1, totalTicks / 50);
@@ -139,8 +150,10 @@ public sealed class EvolutionaryTrainer
         {
             if (tick % decideEvery == 0)
             {
-                for (int i = 0; i < PopulationSize; i++)
-                    inputs[i] = Population[i].Decide(world, world.Agents[i]);
+                if (pool != null) pool.Run();        // time 0 e time 1 decidem em paralelo (mundo parado, só leitura)
+                else
+                    for (int i = 0; i < PopulationSize; i++)
+                        inputs[i] = Population[i].Decide(world, world.Agents[i]);
             }
 
             world.Step(inputs);
@@ -165,6 +178,7 @@ public sealed class EvolutionaryTrainer
 
             if (world.Done || EndNow) break;
         }
+        } finally { pool?.Dispose(); }
 
         Progress = 1f;
         onProgress?.Invoke(1f);

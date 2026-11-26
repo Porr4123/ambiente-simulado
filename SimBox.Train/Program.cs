@@ -13,9 +13,11 @@ using SimBox.Train;
 //     --noopen        não abrir o navegador automaticamente
 //     --nomonitor     sem servidor de monitor
 //     --quiet         sem painel no console (uma linha por geração)
+//     --serial        tudo numa thread só (padrão com menos de 3 núcleos)
+//     --parallel      força 1 núcleo p/ o mundo + 1 p/ cada time (padrão com 3+ núcleos)
 
 int gens = 0, port = 5080; int? seed = null; float speed = 0; string outDir = "runs"; string? resumeDir = null;   // gens 0 = ilimitado
-bool open = true, monitorOn = true, quiet = false;
+bool open = true, monitorOn = true, quiet = false; bool? parallelTeams = null;
 var inv = CultureInfo.InvariantCulture;
 for (int i = 0; i < args.Length; i++)
 {
@@ -30,11 +32,14 @@ for (int i = 0; i < args.Length; i++)
         case "--noopen": open = false; break;
         case "--nomonitor": monitorOn = false; break;
         case "--quiet": quiet = true; break;
+        case "--serial": parallelTeams = false; break;
+        case "--parallel": parallelTeams = true; break;
         default: Console.WriteLine($"Opção desconhecida: {args[i]}"); return 1;
     }
 }
 
 var trainer = new EvolutionaryTrainer(seed: seed) { Speed = speed };
+if (parallelTeams != null) trainer.ParallelTeams = parallelTeams.Value;
 if (resumeDir != null)
 {
     var latest = RunLogger.LoadLatest(resumeDir);
@@ -90,6 +95,7 @@ if (!Console.IsInputRedirected)
         catch { /* sem console interativo: só pelo Ctrl+C */ }
     }) { IsBackground = true, Name = "teclado" }.Start();
 }
+Console.WriteLine(trainer.ParallelTeams ? $"Núcleos: 1 do mundo + 1 por time (decisão dos 2 times em paralelo) · {Environment.ProcessorCount} lógicos nesta máquina" : $"Núcleos: modo serial (uma thread) · {Environment.ProcessorCount} lógicos nesta máquina — use --parallel para 1 núcleo do mundo + 1 por time");
 Console.WriteLine(gens > 0 ? $"Limite: {gens} gerações · Ctrl+S para parar antes." : "Gerações ilimitadas · Ctrl+S para parar ao fim da geração (2× = encerrar a geração em curso já).");
 
 var swTotal = Stopwatch.StartNew(); int ran = 0;
@@ -143,7 +149,7 @@ static void DrawDashboard(EvolutionaryTrainer t, int weeks, bool running, TimeSp
     Console.WriteLine(new string('─', 78));
 
     Console.WriteLine($"Melhor fitness : {t.BestFitness,8:F1}     Média: {t.AvgFitness,8:F1}      (última geração concluída)   ");
-    Console.WriteLine($"Sobreviventes  : {t.SurvivorsLastGen,2}/64                                              ");
+    Console.WriteLine($"Sobreviventes  : {t.SurvivorsLastGen,2}/{EvolutionaryTrainer.PopulationSize}                                              ");
     Console.WriteLine();
 
     float total = Math.Abs(t.Team0Score) + Math.Abs(t.Team1Score) + 0.001f;

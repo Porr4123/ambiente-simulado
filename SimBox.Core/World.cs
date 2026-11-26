@@ -102,18 +102,35 @@ public sealed partial class World
         Nodes.Clear(); Ghouls.Clear(); Animals.Clear(); Carcasses.Clear(); Drops.Clear(); Projs.Clear(); Robots.Clear(); Flares.Clear(); Events.Clear();
         foreach (var l in ngrid) l.Clear();
         Array.Clear(KillsByKind); GhoulsSpawned = Deaths = 0;
+        SetupTeamGrid();
         GenerateWorld();
         int k = 0; var inTeam = new int[2];
         foreach (var a in Agents)
         {
             ResetAgent(a, true);
-            if (Cfg.TeamSpawns) { int t = a.Team & 1, j = inTeam[t]++; var b = TeamBase(t); a.Pos = new Vector2(b.X + (j % 4 - 1.5f) * Cfg.TeamSpawnSpacing, b.Y + (j / 4 - 1.5f) * Cfg.TeamSpawnSpacing); }
+            if (Cfg.TeamSpawns) { int t = a.Team & 1, j = inTeam[t]++; var b = TeamBase(t); a.Pos = new Vector2(b.X + (j % teamCols - (teamCols - 1) / 2f) * Cfg.TeamSpawnSpacing, b.Y + (j / teamCols - (teamRows - 1) / 2f) * Cfg.TeamSpawnSpacing); }
             else a.Pos = new Vector2(W / 2 + (k % 3 - 1) * 70, H / 2 + (k / 3 - 1) * 70);
             k++;
         }
         TopUpAnimals();
     }
 
+    // grade de spawn de cada time (colunas × linhas), calculada pelo tamanho do maior time: 16 → 6×3, 32 → 8×4
+    int teamCols = 4, teamRows = 4; float baseHalfX, baseHalfY;
+    void SetupTeamGrid()
+    {
+        int n0 = 0, n1 = 0; foreach (var a in Agents) if ((a.Team & 1) == 0) n0++; else n1++;
+        int per = Math.Max(1, Math.Max(n0, n1));
+        teamCols = Math.Clamp((int)MathF.Ceiling(MathF.Sqrt(per * 2f)), 1, 8); teamRows = (per + teamCols - 1) / teamCols;
+        baseHalfX = (teamCols - 1) / 2f * Cfg.TeamSpawnSpacing; baseHalfY = (teamRows - 1) / 2f * Cfg.TeamSpawnSpacing;
+    }
+    /// <summary>Está dentro da área de spawn de algum time (retângulo da grade + margem)? Usado para não colocar recursos em cima dos agentes.</summary>
+    bool InTeamBase(Vector2 p, float pad)
+    {
+        if (!Cfg.TeamSpawns) return false;
+        for (int t = 0; t < 2; t++) { var b = TeamBase(t); if (MathF.Abs(p.X - b.X) < baseHalfX + pad && MathF.Abs(p.Y - b.Y) < baseHalfY + pad) return true; }
+        return false;
+    }
     public Vector2 TeamBase(int team) => new(W * ((team & 1) == 0 ? 0.25f : 0.75f), H / 2);
 
     void ResetAgent(Agent a, bool full)
@@ -169,7 +186,7 @@ public sealed partial class World
             {
                 var p = new Vector2(rng.Float(80, W - 80), rng.Float(80, H - 80));
                 if (Vector2.Distance(p, center) < 350) continue;
-                if (Cfg.TeamSpawns && (Vector2.Distance(p, TeamBase(0)) < 450 || Vector2.Distance(p, TeamBase(1)) < 450)) continue;
+                if (InTeamBase(p, 150)) continue;
                 if (Cfg.TeamWall && MathF.Abs(p.X - W / 2) < Cfg.Cell / 2 + 60) continue;      // nada enterrado dentro do muro
                 if (!rng.Chance(weight(Sample(forest, gw, 600, p.X, p.Y), Sample(rocky, gw, 600, p.X, p.Y)))) continue;
                 float r = k == NodeKind.Tree ? 30 : 38; if (!NodeFree(p, r)) continue;
@@ -187,7 +204,7 @@ public sealed partial class World
         for (int c = 0; c < clusters; c++)
         {
             var cp = new Vector2(rng.Float(300, W - 300), rng.Float(300, H - 300));
-            if (Vector2.Distance(cp, center) < 500 || (Cfg.TeamSpawns && (Vector2.Distance(cp, TeamBase(0)) < 600 || Vector2.Distance(cp, TeamBase(1)) < 600))) { c--; continue; }
+            if (Vector2.Distance(cp, center) < 500 || InTeamBase(cp, 250)) { c--; continue; }
             for (int i = 0; i < 5; i++) { var p = cp + new Vector2(rng.Float(-110, 110), rng.Float(-110, 110)); if (NodeFree(p, 30)) AddNode(NodeKind.Crate, p); }
         }
     }

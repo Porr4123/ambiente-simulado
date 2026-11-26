@@ -35,11 +35,13 @@ WASD anda · Shift corre (gasta stamina) · mouse mira · clique esquerdo usa o 
 
 ## Treino dos agentes (neuroevolução)
 
-    dotnet run --project SimBox.Train -c Release -- [--gens N] [--seed N] [--out runs] [--port 5080] [--speed X] [--resume runs/run_...] [--noopen] [--nomonitor] [--quiet]
+    dotnet run --project SimBox.Train -c Release -- [--gens N] [--seed N] [--out runs] [--port 5080] [--speed X] [--resume runs/run_...] [--noopen] [--nomonitor] [--quiet] [--serial|--parallel]
 
 Sem `--gens` o treino é **ilimitado**: pare com **Ctrl+S** no console (termina ao fim da geração em curso, que é gravada; um 2º Ctrl+S encerra a geração em curso já). `--gens N` define um limite opcional.
 
 64 agentes (2 times de 32, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2).
+**Núcleos**: com 3+ núcleos lógicos o treino usa **1 núcleo para o mundo** (a thread principal: `World.Step`, monitor, progresso) e **1 núcleo para cada time** (threads dedicadas que só decidem — features + rede — os agentes do seu time, em paralelo, com o mundo parado/só leitura). O resultado é idêntico ao serial para a mesma seed. `--serial` força uma thread só; `--parallel` força o modo dividido mesmo com menos núcleos. As threads não são fixadas a um núcleo físico: quem escala é o sistema operacional.
+
 Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o resto nasce de cruzamento + mutação. Os times são sempre 32×32.
 
 **Regras**
@@ -54,6 +56,8 @@ Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o
   (o doador ganha bônus, 1x por item) ou jogada fora. Bots não refazem ferramenta igual/pior à que já têm.
 - Estações de trabalho: fabricar também dá bônus grande (`Defs.StationBonus`: fogueira 8, bancada/abrasador 20, mesa de costura 25, mesa de pesquisa 40, smelter 60), 1x por item por agente por geração.
 - Comer: comer/curar **sem desperdício** (sem passar de 255 de fome/vida) dá bônus de `Rw.EatPerPoint` (0,06) por ponto recuperado; comer desperdiçando, ou comida que fere (carne crua/podre), não paga bônus.
+
+**Obstáculos**: a rede enxerga a construção sólida mais próxima (muro, portão, estação, baú... numa janela de 8 células) e o muro do meio (enquanto existe), no mesmo formato dos recursos (dx, dy, distância; "nada por perto" = 0, 0, 1). São 6 entradas novas no fim do vetor (99 no total); cérebros salvos com 93 entradas são migrados ao carregar com peso 0 nelas, então se comportam exatamente como antes. A grade de spawn se adapta ao tamanho do time e nenhum recurso nasce na área dos times.
 
 **Registro** em `runs/run_AAAAMMDD_HHMMSS/`: `summary.csv`, e por geração `gen_0001/log.txt` (resumo, tabela dos 64 agentes, eventos) +
 `top1_...brain` … `top8_...brain` (os 8 melhores). `--resume runs/run_...` retoma da última geração gravada.

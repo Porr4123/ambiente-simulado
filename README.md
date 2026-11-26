@@ -35,7 +35,7 @@ WASD anda · Shift corre (gasta stamina) · mouse mira · clique esquerdo usa o 
 
 ## Treino dos agentes (neuroevolução)
 
-    dotnet run --project SimBox.Train -c Release -- [--gens 100] [--seed N] [--out runs] [--port 5060] [--speed X] [--resume runs/run_...] [--noopen] [--nomonitor] [--quiet]
+    dotnet run --project SimBox.Train -c Release -- [--gens 100] [--seed N] [--out runs] [--port 5080] [--speed X] [--resume runs/run_...] [--noopen] [--nomonitor] [--quiet]
 
 32 agentes (2 times de 16, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2).
 Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o resto nasce de cruzamento + mutação. Os times são sempre 16×16.
@@ -53,6 +53,6 @@ Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o
 **Registro** em `runs/run_AAAAMMDD_HHMMSS/`: `summary.csv`, e por geração `gen_0001/log.txt` (resumo, tabela dos 32 agentes, eventos) +
 `top1_...brain` … `top8_...brain` (os 8 melhores). `--resume runs/run_...` retoma da última geração gravada.
 
-**Monitor duplo** (abre duas abas; arraste uma para cada monitor): `http://localhost:5060/` = mapa (agentes azul/vermelho, recursos amarelos,
-construções quadrados cinza, ghouls verdes) e `http://localhost:5060/focus` = câmera no top 1 atual (status, inventário, decisão da rede, eventos).
+**Monitor duplo** (abre duas abas; arraste uma para cada monitor): `http://localhost:5080/` = mapa (agentes azul/vermelho, recursos amarelos,
+construções quadrados cinza, ghouls verdes) e `http://localhost:5080/focus` = câmera no top 1 atual (status, inventário, decisão da rede, eventos).
 Use `--speed 5` para acompanhar em 5× tempo real; sem `--speed` roda o mais rápido possível.

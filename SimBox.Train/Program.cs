@@ -7,14 +7,14 @@ using SimBox.Train;
 //     --gens N        número de gerações (padrão 100)
 //     --seed N        semente do treino (reproduzível)
 //     --out DIR       pasta dos registros (padrão ./runs)
-//     --port N        porta do monitor (padrão 5060)
+//     --port N        porta do monitor (padrão 5080)
 //     --speed X       X× tempo real para acompanhar nos monitores (0 = o mais rápido possível, padrão)
 //     --resume DIR    retoma de uma pasta run_... (usa os top 8 da última geração gravada como elite)
 //     --noopen        não abrir o navegador automaticamente
 //     --nomonitor     sem servidor de monitor
 //     --quiet         sem painel no console (uma linha por geração)
 
-int gens = 100, port = 5060; int? seed = null; float speed = 0; string outDir = "runs"; string? resumeDir = null;
+int gens = 100, port = 5080; int? seed = null; float speed = 0; string outDir = "runs"; string? resumeDir = null;
 bool open = true, monitorOn = true, quiet = false;
 var inv = CultureInfo.InvariantCulture;
 for (int i = 0; i < args.Length; i++)

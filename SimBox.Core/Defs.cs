@@ -313,7 +313,8 @@ public static class Rw
     public const float KillGhoulBase = 2f, KillGhoulPerKind = 1.5f;   // (base + por tipo) × TechMult
     public const float DonateFactor = 0.5f;     // doador ganha ToolBonus(item doado) × fator
     // ---- modo coleta: a pontuação do modo é separada (World.Score) e só usa os valores abaixo ----
-    public const float CollectWood = 1f, CollectStone = 2f, CollectOre = 15f;   // pontos por unidade coletada (só até SimConfig.GatherWindow). Ferro/minério vale bem mais, mas exige picareta
+    public const float CollectWood = 1f, CollectStone = 2f, CollectOre = 15f;   // pontos por unidade coletada DE DIA. Ferro/minério vale bem mais, mas exige picareta
+    public const float CollectOreNight = 5f;                                    // de noite só o minério pontua, reduzido a 5 por unidade
     public const float Extract = 1000f;                                          // pontos ao ser extraído no ponto de extração
 
     public const float EatPerPoint = 0.06f;     // comer/curar SEM desperdício: bônus por ponto de fome/vida realmente recuperado (cozida = ~7,6; laranja = 2,4; bandagem = 3,6)
@@ -359,7 +360,8 @@ public sealed class SimConfig
     public int RadZones; public float RadZoneRadius = 380f, RadRate = 30f;   // zonas de radiação fixas no mapa (RadRate = pontos de radiação/s dentro delas)
     public bool Extraction; public float ExtractionRadius = 160f;            // ponto de extração no canto inferior esquerdo: o agente é destruído ao entrar
     public bool CollectScore;                               // liga a pontuação de coleta (World.Score)
-    public float GatherWindow = 60f;                        // a coleta só pontua até este segundo da simulação
+    public bool ExtractNightOnly;                           // o ponto de extração só funciona de noite
+    // CollectScore: de dia toda coleta pontua; de noite só o minério, a Rw.CollectOreNight
 }
 
 public sealed class Rng

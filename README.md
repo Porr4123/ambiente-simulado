@@ -43,12 +43,13 @@ Sem `--gens` o treino é **ilimitado**: pare com **Ctrl+S** no console (termina 
 
 O treino é dividido em **modelos** (`SimBox.Train/Models/`): cada um define mundo, regras, entradas extras da rede, pontuação e registro. O padrão é `coleta`.
 
-**`coleta`** (padrão) — 32 IAs começam do zero num mundo sem monstros e sem combate:
-- 1 min para coletar (só a coleta dentro desse 1º minuto pontua: madeira 1 · pedra 2 · minério 15 por unidade) e mais 8 min (540 s no total) para chegar ao ponto de extração no canto inferior esquerdo, enfrentando fome, frio (constante) e 5 zonas de radiação fixas.
-- Ao entrar na extração a IA é destruída e ganha **1000 pontos**. Fitness = pontos de coleta + extração.
-- Pedra não sai com a mão (o agente começa com 2 pedras para o machado básico); minério exige picareta; fruta só se colhe com a mão. Recursos são finitos: quebram ao esgotar e reaparecem em outro lugar após 90 s.
+**`coleta`** (padrão) — 32 IAs começam do zero num mundo sem monstros e sem combate. Um ciclo = **dia de 8 min + noite de 8 min** (960 s):
+- **Dia**: toda coleta pontua (madeira 1 · pedra 2 · minério 15 por unidade) e o ponto de extração (canto inferior esquerdo) está **fechado**.
+- **Noite**: a extração **abre** (+1000 pontos; a IA é destruída ao entrar), a coleta não pontua, **exceto minério, reduzido a 5**. O frio só age à noite (de dia recupera; fogueira acesa aquece). Há 5 zonas de radiação fixas.
+- Quem não for extraído até o amanhecer morre e **fica com 0** (constante `KeepScoreOnFail` em `CollectModel.cs`; `true` mantém os pontos de coleta).
+- Pedra não sai com a mão (o agente começa com 2 pedras para o machado básico); minério exige picareta; fruta só com a mão. Recursos são finitos: quebram ao esgotar e reaparecem em outro lugar após 90 s.
 - Mesas de trabalho têm fila própria de fabricação (independente do jogador). Só existem 4 receitas, já liberadas: fogueira, mesa de trabalho, machado básico, picareta.
-- Ajustes: `SimBox.Train/Models/CollectModel.cs` (duração, janela, mapa) e `SimConfig` em `SimBox.Core/Defs.cs` (rendimento dos recursos, raio/taxa da radiação, etc.).
+- Ajustes: `SimBox.Train/Models/CollectModel.cs` e `SimConfig` em `SimBox.Core/Defs.cs`.
 
 **`times`** — o modo anterior: 64 agentes (2 times de 32, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2), com combate, ghouls, muro entre os times e estações.
 

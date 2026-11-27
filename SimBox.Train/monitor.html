@@ -78,7 +78,7 @@ async function poll() {
     const j = await r.json();
     if (j.nodes) nodes = j.nodes;
     if (j.nv !== undefined) nv = j.nv;
-    if (j.ag) { S = j; S.dayVis = j.day || j.mode === 'coleta'; lastOk = Date.now(); if (Date.now() - slowAt > 1500) { slowOn = !!j.slow; renderSlow(); } }
+    if (j.ag) { S = j; S.dayVis = j.day; lastOk = Date.now(); if (Date.now() - slowAt > 1500) { slowOn = !!j.slow; renderSlow(); } }
   } catch (e) { /* servidor ocupado ou fechado */ }
   $('off').style.display = Date.now() - lastOk > 4000 ? 'flex' : 'none';
   setTimeout(poll, 100);
@@ -88,12 +88,12 @@ function headHtml() {
   if (S.mode === 'coleta') {
     const n = S.ag.length, ext = S.ag.filter(a => a[7] === 1).length, live = S.ag.filter(a => a[4]).length, dead = n - ext - live;
     const sp0 = S.speed > 0 ? S.speed + '× tempo real' : 'velocidade máxima';
-    const phase = S.t < S.win ? `🌲 coleta · restam ${fmt(S.win - S.t)}` : '🚩 rumo à extração';
+    const phase = S.t < S.win ? `☀ dia · coleta pontua · extração fechada · restam ${fmt(S.win - S.t)}` : `☾ noite · extração ABERTA · só minério (5) · restam ${fmt(S.tot - S.t)}`;
     return `<div class="row"><b>Geração ${S.gen}</b><span>coleta e extração</span></div>
     <div class="row"><span>${phase}</span><span>${fmt(S.t)} / ${fmt(S.tot)}${S.done ? ' · fim' : ''}</span></div>
     <div class="row"><span class="t0">● ${live} em jogo</span><span style="color:#4ade80">✓ ${ext} extraídos</span><span style="color:var(--dim)">✝ ${dead}</span></div>
     <div class="row"><span style="color:var(--dim)">ger. anterior: melhor ${S.best} · média ${S.avg}</span></div>
-    <div style="color:var(--dim)">${sp0} · ${VIEW === 'focus' ? 'Foco' : 'Mapa'} · frio constante</div>`;
+    <div style="color:var(--dim)">${sp0} · ${VIEW === 'focus' ? 'Foco' : 'Mapa'} · frio só à noite</div>`;
   }
   const a0 = S.ag.filter(a => a[1] === 0 && a[4]).length, a1 = S.ag.filter(a => a[1] === 1 && a[4]).length;
   const n0 = S.ag.filter(a => a[1] === 0).length, n1 = S.ag.filter(a => a[1] === 1).length;

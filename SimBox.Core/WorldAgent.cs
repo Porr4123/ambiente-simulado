@@ -76,7 +76,7 @@ public sealed partial class World
         a.Vel = dir * speed;
         if (moving) a.Pos = Resolve(a.Pos + a.Vel * dt, a.Radius, true);
         a.Stamina = Math.Clamp(a.Stamina + (sprint ? -Cfg.StaminaDrain : Cfg.StaminaRegen) * dt, 0, Defs.StatMax);
-        if (ExtractionPos is Vector2 ep)                  // ponto de extração: ao entrar, o agente é destruído e pontua
+        if (ExtractionPos is Vector2 ep && (!Cfg.ExtractNightOnly || !IsDay))      // ponto de extração (só de noite no modo coleta): ao entrar, o agente é destruído e pontua
         {
             float de = Vector2.Distance(a.Pos, ep); if (de < a.MinExtractDist) a.MinExtractDist = de;
             if (de <= Cfg.ExtractionRadius) { ExtractAgent(a); return; }
@@ -482,12 +482,13 @@ public sealed partial class World
         return true;
     }
 
-    /// <summary>Contabiliza a coleta do agente e, dentro da janela (GatherWindow), soma os pontos do modo coleta.</summary>
+    /// <summary>Contabiliza a coleta do agente e soma os pontos do modo coleta.</summary>
     void Collected(Agent a, Item item, int n)
     {
         if (item == Wood) a.GotWood += n; else if (item == Stone) a.GotStone += n; else if (item == Ore) a.GotOre += n;
-        if (!Cfg.CollectScore || Time > Cfg.GatherWindow) return;
-        Score[a.Id] += n * (item == Wood ? Rw.CollectWood : item == Stone ? Rw.CollectStone : item == Ore ? Rw.CollectOre : 0f);
+        if (!Cfg.CollectScore) return;
+        if (IsDay) Score[a.Id] += n * (item == Wood ? Rw.CollectWood : item == Stone ? Rw.CollectStone : item == Ore ? Rw.CollectOre : 0f);
+        else if (item == Ore) Score[a.Id] += n * Rw.CollectOreNight;                      // noite: só o minério, valor reduzido
     }
 
     /// <summary>Recurso esgotado: quebra e só reaparece (em outro lugar) depois de Cfg.NodeRespawnSeconds.</summary>

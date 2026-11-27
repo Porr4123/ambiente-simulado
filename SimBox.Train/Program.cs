@@ -220,7 +220,7 @@ static void DrawCollect(EvolutionaryTrainer t, bool running, TimeSpan elapsed, f
         else Console.WriteLine(new string(' ', 90));
     }
     Console.WriteLine();
-    Console.WriteLine($"pontos = coleta no 1º minuto (madeira {SimBox.Rw.CollectWood:0} · pedra {SimBox.Rw.CollectStone:0} · minério {SimBox.Rw.CollectOre:0} por unidade) + {SimBox.Rw.Extract:0} ao chegar na extração (canto inferior esquerdo)");
+    Console.WriteLine($"dia 8 min: coleta pontua (madeira {SimBox.Rw.CollectWood:0} · pedra {SimBox.Rw.CollectStone:0} · minério {SimBox.Rw.CollectOre:0}); noite 8 min: extração abre (+{SimBox.Rw.Extract:0}, canto inferior esquerdo), só minério pontua ({SimBox.Rw.CollectOreNight:0}); quem não extrai fica com 0");
     Console.WriteLine("sem monstros · sem combate · fome, frio constante e zonas de radiação · só fogueira, mesa, machado e picareta");
     Console.WriteLine(t.EndNow ? "⏹ encerrando a geração em curso agora...                                      " : t.StopRequested ? "⏹ parada solicitada: termina ao fim desta geração (Ctrl+S de novo = encerrar já)       " : "Ctrl+S: parar ao fim da geração (2× = encerrar a geração em curso já)                    ");
     Console.WriteLine(new string('─', 90));

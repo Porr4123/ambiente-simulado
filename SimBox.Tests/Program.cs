@@ -366,15 +366,22 @@ static class T
         Check(a.Extracted && !a.Alive && w.Deaths == 0 && Near(w.Score[0], Rw.Extract, 0.01f), "extração: o agente é destruído (não é morte) e ganha 1000 pontos");
         w = Mk(c => { c.Extraction = true; c.CollectScore = true; c.WorldW = c.WorldH = 4500; }); w.Agents[0].IsHuman = false; Place(w.Agents[0], exP.X + 50, exP.Y); One(w, I());
         Check(w.Done, "extração: a simulação acaba quando todos foram extraídos ou morreram");
-        // pontuação de coleta: valores diferentes por recurso e só dentro da janela
-        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; c.GatherWindow = 60f; }); a = w.Agents[0]; Give(a, PickBasic, 1, w); Give(a, AxeBasic, 1, w);
+        // pontuação de coleta: valores diferentes por recurso (dia: tudo; noite: só minério a 5)
+        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; }); a = w.Agents[0]; Give(a, PickBasic, 1, w); Give(a, AxeBasic, 1, w);
         w.DebugNode(NodeKind.IronOre, new Vector2(3085, 3000)); Select(w, PickBasic); Run(w, 0.65f, I(atk: true), true);
         Check(a.Count(Ore) >= 1 && Near(w.Score[0], a.Count(Ore) * Rw.CollectOre, 0.01f), $"pontos: minério vale {Rw.CollectOre:0} por unidade (precisa de picareta)");
-        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; c.GatherWindow = 60f; }); a = w.Agents[0]; Give(a, AxeBasic, 1, w);
+        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; }); a = w.Agents[0]; Give(a, AxeBasic, 1, w);
         w.DebugNode(NodeKind.Tree, new Vector2(3085, 3000)); Select(w, AxeBasic); Run(w, 1f, I(atk: true), true); int wd = a.Count(Wood);
         Check(wd > 0 && Near(w.Score[0], wd * Rw.CollectWood, 0.01f) && Rw.CollectWood < Rw.CollectStone && Rw.CollectStone < Rw.CollectOre, $"pontos: madeira {Rw.CollectWood:0} < pedra {Rw.CollectStone:0} < minério {Rw.CollectOre:0}");
-        w.Time = 61f; float sc = w.Score[0]; Run(w, 1f, I(atk: true), true);
-        Check(a.Count(Wood) > wd && w.Score[0] == sc, "pontos: depois da janela de 60 s a coleta continua, mas não pontua");
+        w.DebugSetTime(w.Cfg.DayLen + 5); float sc = w.Score[0]; Run(w, 1f, I(atk: true), true);
+        Check(a.Count(Wood) > wd && w.Score[0] == sc, "pontos: de noite a madeira continua saindo, mas não pontua");
+        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; }); a = w.Agents[0]; Give(a, PickBasic, 1, w); w.DebugSetTime(w.Cfg.DayLen + 5);
+        w.DebugNode(NodeKind.IronOre, new Vector2(3085, 3000)); Select(w, PickBasic); Run(w, 0.65f, I(atk: true), true);
+        Check(a.Count(Ore) >= 1 && Near(w.Score[0], a.Count(Ore) * Rw.CollectOreNight, 0.01f) && Rw.CollectOreNight < Rw.CollectOre, $"pontos: de noite só o minério pontua, reduzido a {Rw.CollectOreNight:0}");
+        // extração só de noite
+        w = Mk(c => { c.Extraction = true; c.ExtractNightOnly = true; c.CollectScore = true; c.WorldW = c.WorldH = 4500; }); a = w.Agents[0]; Place(a, exP.X + 50, exP.Y); One(w, I());
+        Check(a.Alive && !a.Extracted, "extração: de dia o ponto está fechado");
+        w.DebugSetTime(w.Cfg.DayLen + 5); One(w, I()); Check(a.Extracted && Near(w.Score[0], Rw.Extract, 0.01f), "extração: de noite o ponto abre");
         // sem monstros e sem PvP
         foreach (bool nog in new[] { true, false })
         {

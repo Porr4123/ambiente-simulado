@@ -43,6 +43,7 @@ public sealed partial class World
     }
     public string? ResearchCheck(Agent a, Item item)
     {
+        if (Cfg.AllowedCrafts != null) return "pesquisa desativada neste modo";
         var rec = Defs.Recipes.FirstOrDefault(r => r.Out == item && r.SkillPts > 0);
         if (rec == null) return "não precisa pesquisar";
         if (a.Unlocked[(int)item]) return "já pesquisado";
@@ -75,6 +76,11 @@ public sealed partial class World
         a.Vel = dir * speed;
         if (moving) a.Pos = Resolve(a.Pos + a.Vel * dt, a.Radius, true);
         a.Stamina = Math.Clamp(a.Stamina + (sprint ? -Cfg.StaminaDrain : Cfg.StaminaRegen) * dt, 0, Defs.StatMax);
+        if (ExtractionPos is Vector2 ep)                  // ponto de extração: ao entrar, o agente é destruído e pontua
+        {
+            float de = Vector2.Distance(a.Pos, ep); if (de < a.MinExtractDist) a.MinExtractDist = de;
+            if (de <= Cfg.ExtractionRadius) { ExtractAgent(a); return; }
+        }
 
         // sobrevivência [wiki]
         a.Hunger = MathF.Max(0, a.Hunger - Cfg.HungerRate * dt);
@@ -86,6 +92,7 @@ public sealed partial class World
         if (a.Hunger <= 0) HurtAgent(a, Cfg.StarveDamage * dt, false);
         if (a.Cold <= 0) HurtAgent(a, Cfg.FreezeDamage * dt, false);
         a.Rad = MathF.Max(0, a.Rad - 2f * dt);
+        foreach (var z in RadZones) if (Vector2.DistanceSquared(z.Pos, a.Pos) < z.R * z.R) a.Rad = MathF.Min(Defs.StatMax, a.Rad + Cfg.RadRate * dt);
         if (a.Rad > 128) HurtAgent(a, (a.Rad - 128) / 25f * dt, false);
         if (a.Alive && Time - a.LastHurt > 6f && a.Hunger > 0 && a.Cold > 0 && a.Rad < 128) a.Hp = MathF.Min(Defs.StatMax, a.Hp + Cfg.HealthRegen * dt);
         Rewards[a.Id] += 0.0005f * dt * Cfg.Tps;
@@ -123,6 +130,13 @@ public sealed partial class World
         if (friend) { atk.FriendKills++; Rewards[atk.Id] += Rw.KillFriend; }
         else { atk.EnemyKills++; Rewards[atk.Id] += Rw.KillEnemy; }
         Trace?.Invoke($"{T()} A{atk.Id}(T{atk.Team}) matou {(friend ? "AMIGO" : "inimigo")} A{v.Id}(T{v.Team}) com {Defs.Name(weapon)}");
+    }
+    /// <summary>Entrou no ponto de extração: o agente é destruído (não é morte) e ganha Rw.Extract pontos.</summary>
+    void ExtractAgent(Agent a)
+    {
+        a.Extracted = true; a.ExtractedAt = Time; a.Alive = false; a.CraftLeft = 0; a.CraftRecipe = -1;
+        if (Cfg.CollectScore) Score[a.Id] += Rw.Extract;
+        Trace?.Invoke($"{T()} A{a.Id} chegou à extração (+{Rw.Extract:0} pontos) · madeira {a.GotWood} pedra {a.GotStone} minério {a.GotOre}");
     }
     void Die(Agent a)
     {
@@ -242,6 +256,7 @@ public sealed partial class World
         if (r < 0 || r >= Defs.Recipes.Length) return "receita inválida";
         var rec = Defs.Recipes[r];
         if (!a.Alive) return "morto";
+        if (Cfg.AllowedCrafts != null && !Cfg.AllowedCrafts.Contains(rec.Out)) return "fabricação bloqueada neste modo";
         if (!rec.BotOk && !a.IsHuman) return "bots não conseguem fabricar isto";
         if (a.CraftLeft > 0) return "já está fabricando algo";
         if (!a.IsHuman && Defs.ToolFamily(rec.Out) >= 0 && BestToolTier(a, Defs.ToolFamily(rec.Out)) >= Defs.ToolTier(rec.Out)) return "já tem ferramenta igual ou melhor";
@@ -255,6 +270,11 @@ public sealed partial class World
             if (station < 0) return $"precisa estar perto de: {Defs.Blds[(int)rec.Station].Name}";
             var sb = (Bld)BldGrid[station];
             if ((sb == Bld.Campfire || sb == Bld.Abrasador) && !IsLit(station)) return "o fogo está apagado (interaja com madeira)";
+            if (Cfg.StationQueues && sb == Bld.Workbench && queues.TryGetValue(station, out var qq))
+            {
+                if (qq.Count >= Cfg.StationQueueMax) return "a fila da mesa está cheia";
+                foreach (var j in qq) if (j.Owner == a.Id && Defs.Recipes[j.Recipe].Out == rec.Out) return "já está na fila da mesa";
+            }
         }
         foreach (var (it, n) in rec.In) if (a.Count(it) < n) return $"falta {n - a.Count(it)} {Defs.Name(it)}";
         if (station >= 0 && BldGrid[station] == (byte)Bld.Smelter && charge.GetValueOrDefault(station) <= 0 && !a.Has(Gasoline) && !a.Has(Diesel))
@@ -273,8 +293,36 @@ public sealed partial class World
             charge[station] = c - 1;                       // 1 gasolina = 4 operações; 1 diesel = 12 [user]
         }
         foreach (var (it, n) in rec.In) RemoveItem(a, it, n);
+        if (Cfg.StationQueues && station >= 0 && BldGrid[station] == (byte)Bld.Workbench)
+        {
+            // a mesa tem fila própria: o agente só entrega os ingredientes e fica livre; o item sai da mesa quando terminar
+            if (!queues.TryGetValue(station, out var q)) queues[station] = q = new List<CraftJob>();
+            q.Add(new CraftJob { Recipe = r, Owner = a.Id, Left = MathF.Max(0.05f, rec.Secs * Cfg.CraftTimeScale) });
+            Say(a, $"{Defs.Name(rec.Out)} entrou na fila da mesa."); return;
+        }
         a.CraftTotal = a.CraftLeft = MathF.Max(0.05f, rec.Secs * Cfg.CraftTimeScale); a.CraftRecipe = r;
     }
+    void UpdateStations(float dt)
+    {
+        if (queues.Count == 0) return;
+        foreach (var cell in queues.Keys.ToList())
+        {
+            var q = queues[cell];
+            if (BldGrid[cell] != (byte)Bld.Workbench || q.Count == 0) { queues.Remove(cell); continue; }
+            var j = q[0]; j.Left -= dt; if (j.Left > 0) continue;       // uma mesa fabrica um item por vez, em ordem
+            q.RemoveAt(0);
+            var rec = Defs.Recipes[j.Recipe]; var owner = Agents[j.Owner]; var cc = CellCenter(cell);
+            if (owner.Alive && Vector2.DistanceSquared(owner.Pos, cc) <= Cfg.ReachBuild * Cfg.ReachBuild)
+            {
+                GiveOrDrop(owner, rec.Out, rec.OutN); AddXp(owner, 10 + 12 * rec.Level);
+                if (Defs.ToolFamily(rec.Out) >= 0) ToolObtained(owner, rec.Out, true);
+                Say(owner, $"Pronto na mesa: {Defs.Name(rec.Out)}");
+            }
+            else DropAt(cc, rec.Out, rec.OutN, 0);                      // dono longe ou morto: o item fica no chão ao lado da mesa
+            Trace?.Invoke($"{T()} mesa {cell}: {Defs.Name(rec.Out)} de A{j.Owner} ficou pronto");
+        }
+    }
+
     void FinishCraft(Agent a)
     {
         var rec = Defs.Recipes[a.CraftRecipe]; a.CraftRecipe = -1;
@@ -379,7 +427,7 @@ public sealed partial class World
         Emit(2, a.Pos.X, a.Pos.Y, a.Aim);
         bool hitSomething = false;
         foreach (var g in Ghouls) if (g.Alive && InArc(a.Pos, dir, g.Pos, Defs.Ghouls[(int)g.Kind].Radius, reach, half)) { DamageGhoul(g, t.Dmg, a, t.Item); hitSomething = true; }
-        foreach (var o in Agents) if (o.Alive && o != a && InArc(a.Pos, dir, o.Pos, o.Radius, reach, half)) { DamageAgentBy(o, t.Dmg, a, t.Item, true); hitSomething = true; }
+        foreach (var o in Agents) if (!Cfg.NoPvp && o.Alive && o != a && InArc(a.Pos, dir, o.Pos, o.Radius, reach, half)) { DamageAgentBy(o, t.Dmg, a, t.Item, true); hitSomething = true; }
         foreach (var an in Animals) if (an.Alive && InArc(a.Pos, dir, an.Pos, 24, reach, half)) { DamageAnimal(an, t.Dmg, a); hitSomething = true; }
         for (int i = Carcasses.Count - 1; i >= 0; i--)
         {
@@ -409,7 +457,9 @@ public sealed partial class World
             case NodeKind.SulfurOre: y = t.Sulfur; item = Sulfur; xp = t.XpSulfur; break;
             case NodeKind.OrangeBush: case NodeKind.TomatoBush:
                 if (n.Fruit <= 0) return false;
-                { int take = Math.Min(n.Fruit, rng.Range(2, 3)); n.Fruit -= take; GiveOrDrop(a, n.Kind == NodeKind.OrangeBush ? Orange : Tomato, take); AddXp(a, 3); Emit(5, n.Pos.X, n.Pos.Y, 0, 0, 5); return true; }
+                if (Cfg.FruitHandOnly && t != Defs.Hand) return false;           // frutas só se colhem com a mão
+                { int take = Math.Min(n.Fruit, rng.Range(2, 3)); n.Fruit -= take; GiveOrDrop(a, n.Kind == NodeKind.OrangeBush ? Orange : Tomato, take); a.GotFruit += take; AddXp(a, 3); Emit(5, n.Pos.X, n.Pos.Y, 0, 0, 5);
+                  if (Cfg.FiniteNodes && n.Fruit <= 0) BreakNode(n); return true; }
             case NodeKind.Crate:
                 n.Hp -= t.Dmg; Emit(5, n.Pos.X, n.Pos.Y, 0, 0, 7);
                 if (n.Hp <= 0)
@@ -424,9 +474,44 @@ public sealed partial class World
         int amount = rng.Range(y.lo, y.hi);
         // picareta de ferro: 4/8/12 pedras [wiki]
         if (n.Kind == NodeKind.Rock && t.Item == PickIron) amount = 4 * rng.Range(1, 3);
+        if (Cfg.FiniteNodes) amount = Math.Min(amount, n.Left);
         GiveOrDrop(a, item, amount); AddXp(a, xp);
         Emit(5, n.Pos.X, n.Pos.Y, 0, 0, (int)n.Kind); Gathered += amount; Rewards[a.Id] += 0.01f * amount;
+        Collected(a, item, amount);
+        if (Cfg.FiniteNodes) { n.Left -= amount; if (n.Left <= 0) BreakNode(n); }
         return true;
+    }
+
+    /// <summary>Contabiliza a coleta do agente e, dentro da janela (GatherWindow), soma os pontos do modo coleta.</summary>
+    void Collected(Agent a, Item item, int n)
+    {
+        if (item == Wood) a.GotWood += n; else if (item == Stone) a.GotStone += n; else if (item == Ore) a.GotOre += n;
+        if (!Cfg.CollectScore || Time > Cfg.GatherWindow) return;
+        Score[a.Id] += n * (item == Wood ? Rw.CollectWood : item == Stone ? Rw.CollectStone : item == Ore ? Rw.CollectOre : 0f);
+    }
+
+    /// <summary>Recurso esgotado: quebra e só reaparece (em outro lugar) depois de Cfg.NodeRespawnSeconds.</summary>
+    void BreakNode(Node n) { n.Alive = false; NodeVersion++; respawnList.Add((Time + Cfg.NodeRespawnSeconds, n)); }
+    void UpdateNodeRespawns()
+    {
+        if (respawnList.Count == 0) return;
+        for (int i = respawnList.Count - 1; i >= 0; i--)
+        {
+            var (at, n) = respawnList[i]; if (Time < at) continue;
+            respawnList.RemoveAt(i);
+            Vector2 p = default; bool ok = false;
+            for (int t = 0; t < 30 && !ok; t++)
+            {
+                p = new Vector2(rng.Float(80, W - 80), rng.Float(80, H - 80));
+                if (!NodeFree(p, n.R)) continue;
+                if (ExtractionPos is Vector2 ex && Vector2.Distance(p, ex) < Cfg.ExtractionRadius + 100) continue;
+                ok = true; foreach (var a in Agents) if (a.Alive && Vector2.DistanceSquared(a.Pos, p) < (n.R + a.Radius + 60) * (n.R + a.Radius + 60)) { ok = false; break; }
+            }
+            if (!ok) { respawnList.Add((Time + 15f, n)); continue; }      // sem lugar livre agora: tenta de novo daqui a pouco
+            ngrid[NodeCell(n.Pos)].Remove(n); n.Pos = p; ngrid[NodeCell(p)].Add(n);
+            n.Alive = true; n.Left = YieldOf(n.Kind); if (n.Kind == NodeKind.OrangeBush || n.Kind == NodeKind.TomatoBush) n.Fruit = 3;
+            NodeVersion++;
+        }
     }
     public long Gathered;
 

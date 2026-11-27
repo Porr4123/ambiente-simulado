@@ -45,9 +45,9 @@ public static class FeatureExtractor
         2 +                         // item selecionado (slot, tecnologia)
         6;                          // obstáculos: construção sólida mais próxima + muro do meio (dx, dy, dist)
 
-    public static float[] Extract(World w, Agent a)
+    public static float[] Extract(World w, Agent a, TrainingModel? model = null)
     {
-        var f = new float[FeatureCount];
+        var f = new float[FeatureCount + (model?.ExtraFeatures ?? 0)];
         int i = 0;
 
         // --- Status do agente (8) ---
@@ -107,6 +107,9 @@ public static class FeatureExtractor
         // --- Obstáculos (6): muros e outras construções sólidas, no mesmo formato dos recursos (dx, dy, dist; "nada por perto" = 0, 0, 1) ---
         EncodeNearestSolidBuilding(w, a.Pos, f, ref i);
         EncodeTeamWall(w, a.Pos, f, ref i);
+
+        // --- Entradas extras do modelo de treinamento (no fim do vetor) ---
+        model?.FillExtraFeatures(w, a, f, ref i);
 
         return f;
     }

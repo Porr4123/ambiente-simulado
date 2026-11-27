@@ -6,7 +6,7 @@ namespace SimBox.Train;
 /// <summary>
 /// Registro do treino em pasta:
 ///   runs/run_AAAAMMDD_HHMMSS/summary.csv
-///   runs/run_.../gen_0001/log.txt            (resumo, tabela dos 64 agentes e eventos da geração)
+///   runs/run_.../gen_0001/log.txt            (resumo, tabela de todos os agentes e eventos da geração)
 ///   runs/run_.../gen_0001/top1_a07_T0_f215.brain ... top8_...   (os 8 melhores da geração)
 /// </summary>
 public sealed class RunLogger
@@ -35,15 +35,15 @@ public sealed class RunLogger
         return dir;
     }
 
-    public void AppendSummary(int genNumber, int weeks, double wallSeconds, float best, float avg, int survivors, float team0, float team1, int enemyKills, int friendKills)
+    public void AppendSummary(string header, string row)
     {
         string path = Path.Combine(RunDir, "summary.csv");
-        if (!File.Exists(path)) File.WriteAllText(path, "geracao,semanas,segundos_reais,melhor,media,sobreviventes,time0,time1,kills_inimigo,kills_amigo\n", new UTF8Encoding(false));
-        File.AppendAllText(path, string.Format(Inv, "{0},{1},{2:0.0},{3:0.0},{4:0.0},{5},{6:0.0},{7:0.0},{8},{9}\n", genNumber, weeks, wallSeconds, best, avg, survivors, team0, team1, enemyKills, friendKills));
+        if (!File.Exists(path)) File.WriteAllText(path, header + "\n", new UTF8Encoding(false));
+        File.AppendAllText(path, row + "\n");
     }
 
     /// <summary>Últimos cérebros salvos numa pasta de geração (ordenados top1..top8) — usado por --resume.</summary>
-    public static (int gen, List<AgentBrain> brains)? LoadLatest(string runDir)
+    public static (int gen, List<AgentBrain> brains)? LoadLatest(string runDir, int expectedInputs = 0)
     {
         if (!Directory.Exists(runDir)) return null;
         var genDir = Directory.GetDirectories(runDir, "gen_*").OrderBy(d => d, StringComparer.Ordinal).LastOrDefault();
@@ -51,6 +51,6 @@ public sealed class RunLogger
         int gen = int.TryParse(Path.GetFileName(genDir)[4..], out var g) ? g : 0;
         var files = Directory.GetFiles(genDir, "top*.brain").OrderBy(f => f, StringComparer.Ordinal).ToList();
         if (files.Count == 0) return null;
-        return (gen, files.Select(AgentBrain.Load).ToList());
+        return (gen, files.Select(f => AgentBrain.Load(f, expectedInputs)).ToList());
     }
 }

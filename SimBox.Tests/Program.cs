@@ -209,7 +209,7 @@ static class T
         One(w, I(cmd: Cmd.Store)); Check(w.BoxCount(ch, Wood) == 5 && w.BoxCount(ch, Meat) == 0 && a.Count(Meat) == 3, "baú guarda madeira e recusa comida [user]");
         w = Mk(); a = w.Agents[0]; int fr = w.DebugPlace(Bld.Fridge, 31, 30); Give(a, Wood, 5, w); Give(a, Meat, 3, w); Give(a, Orange, 40, w);
         One(w, I(cmd: Cmd.Store)); Check(w.BoxCount(fr, Meat) == 3 && w.BoxCount(fr, Wood) == 0, "geladeira guarda só comida");
-        w.DebugSetTime(w.Cfg.DayLen * 0.5f); Give(a, Orange, 10, w); Run(w, 62f, I(), true);
+        w.DebugSetTime(w.Cfg.DayLen * 0.5f); Give(a, Orange, 60, w); Run(w, 120f, I(), true);
         Check(a.Count(RottenOrange) > 0 && w.BoxCount(fr, Orange) == 40 && w.BoxCount(fr, Meat) == 3, "comida fora da geladeira apodrece; dentro não");
         One(w, I(cmd: Cmd.Take)); Check(a.Count(Meat) == 3, "pegar de volta da geladeira");
         w = Mk(); a = w.Agents[0]; int left = w.AddItem(a, Wood, 300);
@@ -307,6 +307,85 @@ static class T
         Check(a.GoodMeals == 0 && w.Rewards[0] - r0 < 0.5f, "carne crua (fere) não paga o bônus");
         w = Mk(); w.AccumulateRewards = true; a = w.Agents[0]; a.Hp = 100; Give(a, Bandage, 1, w); r0 = w.Rewards[0]; One(w, I(cmd: Cmd.Eat, arg: (int)Bandage));
         Check(a.GoodMeals == 1 && w.Rewards[0] - r0 > Rw.EatPerPoint * 60 * 0.9f, "curar sem passar do máximo: bônus");
+
+        // ================= MODO COLETA =================
+        // recursos finitos: quebram ao esgotar e reaparecem (em outro lugar) depois de um tempo
+        w = Mk(c => { c.FiniteNodes = true; c.TreeYield = 6; c.NodeRespawnSeconds = 5f; }); a = w.Agents[0];
+        var tn = w.DebugNode(NodeKind.Tree, new Vector2(3085, 3000)); One(w, I(cmd: Cmd.Select, arg: 5)); var tpos = tn.Pos;
+        Run(w, 6f, I(atk: true, aim: 0), true);
+        Check(!tn.Alive && a.Count(Wood) == 6, $"coleta: árvore com 6 unidades quebra ao esgotar e rende exatamente 6 (madeira={a.Count(Wood)})");
+        Run(w, 5.5f, I(), true);
+        Check(tn.Alive && tn.Left == 6 && tn.Pos != tpos, "coleta: o recurso reaparece depois do tempo, em outro lugar, cheio de novo");
+        w = Mk(c => { c.FiniteNodes = true; }); a = w.Agents[0]; var tn2 = w.DebugNode(NodeKind.Tree, new Vector2(3085, 3000)); One(w, I(cmd: Cmd.Select, arg: 5)); Run(w, 3f, I(atk: true), true);
+        Check(tn2.Alive && tn2.Left == 40 - a.Count(Wood) && a.Count(Wood) > 0, "coleta: a árvore perde só o que foi coletado");
+        // fruta só com a mão
+        w = Mk(c => { c.FruitHandOnly = true; c.FiniteNodes = true; }); a = w.Agents[0]; Give(a, AxeBasic, 1, w);
+        var bushC = w.DebugNode(NodeKind.OrangeBush, new Vector2(3085, 3000)); bushC.Fruit = 3; Select(w, AxeBasic);
+        Run(w, 1f, I(atk: true), true); Check(a.Count(Orange) == 0 && bushC.Fruit == 3, "fruta: com ferramenta na mão não colhe");
+        One(w, I(cmd: Cmd.Select, arg: 6)); Run(w, 1.5f, I(atk: true), true);
+        Check(a.Count(Orange) == 3 && !bushC.Alive, $"fruta: com a mão colhe, e o arbusto quebra quando esgota (laranjas={a.Count(Orange)})");
+        w = Mk(); a = w.Agents[0]; Give(a, AxeBasic, 1, w); w.DebugNode(NodeKind.OrangeBush, new Vector2(3085, 3000)); Select(w, AxeBasic); Run(w, 1f, I(atk: true), true);
+        Check(a.Count(Orange) > 0, "fruta: no jogo normal (sem a regra) a ferramenta ainda colhe");
+        // pedra não sai com a mão; minério exige picareta
+        w = Mk(c => { c.FiniteNodes = true; }); a = w.Agents[0]; var rk = w.DebugNode(NodeKind.Rock, new Vector2(3085, 3000)); One(w, I(cmd: Cmd.Select, arg: 6)); Run(w, 1f, I(atk: true), true);
+        Check(a.Count(Stone) == 2 && rk.Left == 60, "pedra: não sai com a mão (só as 2 do início)");
+        // só 4 receitas e sem pesquisa
+        var four = new HashSet<Item> { Campfire, Workbench, AxeBasic, PickBasic };
+        w = Mk(c => c.AllowedCrafts = four); a = w.Agents[0];
+        Check(a.Unlocked[(int)PickBasic] && a.Unlocked[(int)Workbench] && a.Unlocked[(int)AxeBasic] && a.Unlocked[(int)Campfire], "4 receitas já vêm liberadas (sem pesquisa)");
+        Give(a, Wood, 250, w); Give(a, Stone, 60, w); w.AddXp(a, 5000); w.DebugPlace(Bld.Workbench, 30, 30);
+        Check(w.CraftCheck(a, Array.FindIndex(Defs.Recipes, x => x.Out == Spear), out _) != null && w.CraftCheck(a, Array.FindIndex(Defs.Recipes, x => x.Out == Chest), out _) != null, "outras receitas (lança, baú) ficam bloqueadas");
+        Check(w.CraftCheck(a, Array.FindIndex(Defs.Recipes, x => x.Out == PickBasic), out _) == null && w.ResearchCheck(a, PickIron) != null, "picareta liberada; pesquisa desativada");
+        // fila própria da mesa de trabalho
+        w = Mk(c => { c.StationQueues = true; c.CraftTimeScale = 1f; }); a = w.Agents[0]; Give(a, Wood, 400, w); Give(a, Stone, 60, w); a.Unlocked[(int)PickBasic] = a.Unlocked[(int)Spear] = true;
+        int bench = w.DebugPlace(Bld.Workbench, 30, 30);
+        One(w, I(cmd: Cmd.Craft, arg: Array.FindIndex(Defs.Recipes, x => x.Out == PickBasic)));
+        Check(a.CraftLeft == 0 && w.QueuedJobs(a) == 1 && a.Count(Wood) == 250, "fila da mesa: o agente entrega os ingredientes e fica livre (sem fabricar)");
+        One(w, I(cmd: Cmd.Craft, arg: Array.FindIndex(Defs.Recipes, x => x.Out == Spear)));
+        Check(w.QueuedJobs(a) == 2, "fila da mesa: dá para enfileirar outra receita enquanto a primeira não acabou");
+        Run(w, 5f, I(mx: 1), true); var moved = a.Pos.X > 3000;
+        Check(moved, "fila da mesa: o agente se move livremente enquanto a mesa trabalha");
+        Place(a, 3000, 3000); Run(w, 11f, I(), true);
+        Check(a.Has(PickBasic) && !a.Has(Spear), "fila da mesa: um item por vez, na ordem (a picareta sai aos 15 s, a lança ainda não)");
+        Run(w, 15f, I(), true); Check(a.Has(Spear) && w.QueuedJobs(a) == 0, "fila da mesa: o segundo item sai depois do primeiro");
+        w = Mk(c => { c.StationQueues = true; c.CraftTimeScale = 1f; }); a = w.Agents[0]; Give(a, Wood, 150, w); Give(a, Stone, 30, w); a.Unlocked[(int)PickBasic] = true; w.DebugPlace(Bld.Workbench, 30, 30);
+        One(w, I(cmd: Cmd.Craft, arg: Array.FindIndex(Defs.Recipes, x => x.Out == PickBasic))); Place(a, 3000, 4500); Run(w, 16f, I(), true);
+        Check(!a.Has(PickBasic) && w.Drops.Any(d => d.Item == PickBasic), "fila da mesa: com o dono longe, o item fica no chão ao lado da mesa");
+        var dp = w.Drops.First(d => d.Item == PickBasic).Pos; Place(a, dp.X, dp.Y); Run(w, 1f, I(), true); Check(a.Has(PickBasic), "fila da mesa: ao voltar, o dono pega o item");
+        // radiação
+        w = Mk(c => { c.RadZones = 3; c.Extraction = true; c.WorldW = c.WorldH = 4500; }); a = w.Agents[0];
+        Check(w.RadZones.Count == 3 && w.RadZones.All(z => Vector2.Distance(z.Pos, new Vector2(2250, 2250)) > z.R + 400 && Vector2.Distance(z.Pos, w.ExtractionPos!.Value) > z.R + 400), $"radiação: 3 zonas longe do ponto de partida e da extração");
+        Place(a, w.RadZones[0].Pos.X, w.RadZones[0].Pos.Y); Run(w, 3f, I(), true); Keep(w); Place(a, w.RadZones[0].Pos.X, w.RadZones[0].Pos.Y);
+        float radIn = 0; for (int i = 0; i < 90; i++) { One(w, I()); radIn = a.Rad; } Check(radIn > 60, $"radiação: dentro da zona a radiação sobe ({radIn:0})");
+        Place(a, 2250, 2250); for (int i = 0; i < 2400; i++) One(w, I()); Check(a.Rad < 1, "radiação: fora da zona ela decai");
+        // extração
+        w = Mk(c => { c.Extraction = true; c.CollectScore = true; c.WorldW = c.WorldH = 4500; }); a = w.Agents[0]; var exP = w.ExtractionPos!.Value;
+        Check(exP.X < 400 && exP.Y > 4100, $"extração: no canto inferior esquerdo ({exP.X:0},{exP.Y:0})");
+        Place(a, exP.X + 400, exP.Y); One(w, I()); Check(a.Alive && !a.Extracted && w.Score[0] == 0, "extração: fora do ponto, nada acontece");
+        Place(a, exP.X + 100, exP.Y - 100); One(w, I());
+        Check(a.Extracted && !a.Alive && w.Deaths == 0 && Near(w.Score[0], Rw.Extract, 0.01f), "extração: o agente é destruído (não é morte) e ganha 1000 pontos");
+        w = Mk(c => { c.Extraction = true; c.CollectScore = true; c.WorldW = c.WorldH = 4500; }); w.Agents[0].IsHuman = false; Place(w.Agents[0], exP.X + 50, exP.Y); One(w, I());
+        Check(w.Done, "extração: a simulação acaba quando todos foram extraídos ou morreram");
+        // pontuação de coleta: valores diferentes por recurso e só dentro da janela
+        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; c.GatherWindow = 60f; }); a = w.Agents[0]; Give(a, PickBasic, 1, w); Give(a, AxeBasic, 1, w);
+        w.DebugNode(NodeKind.IronOre, new Vector2(3085, 3000)); Select(w, PickBasic); Run(w, 0.65f, I(atk: true), true);
+        Check(a.Count(Ore) >= 1 && Near(w.Score[0], a.Count(Ore) * Rw.CollectOre, 0.01f), $"pontos: minério vale {Rw.CollectOre:0} por unidade (precisa de picareta)");
+        w = Mk(c => { c.CollectScore = true; c.FiniteNodes = true; c.GatherWindow = 60f; }); a = w.Agents[0]; Give(a, AxeBasic, 1, w);
+        w.DebugNode(NodeKind.Tree, new Vector2(3085, 3000)); Select(w, AxeBasic); Run(w, 1f, I(atk: true), true); int wd = a.Count(Wood);
+        Check(wd > 0 && Near(w.Score[0], wd * Rw.CollectWood, 0.01f) && Rw.CollectWood < Rw.CollectStone && Rw.CollectStone < Rw.CollectOre, $"pontos: madeira {Rw.CollectWood:0} < pedra {Rw.CollectStone:0} < minério {Rw.CollectOre:0}");
+        w.Time = 61f; float sc = w.Score[0]; Run(w, 1f, I(atk: true), true);
+        Check(a.Count(Wood) > wd && w.Score[0] == sc, "pontos: depois da janela de 60 s a coleta continua, mas não pontua");
+        // sem monstros e sem PvP
+        foreach (bool nog in new[] { true, false })
+        {
+            w = Mk(c => { c.NoGhouls = nog; c.DayLen = 1; c.NightLen = 1; }); w.Time = 100f; Run(w, 2.5f, I(), true);
+            Check(nog ? w.Ghouls.Count == 0 : w.Ghouls.Count > 0, nog ? "sem monstros: nenhum ghoul nasce à noite" : "controle: sem a regra os ghouls nascem");
+        }
+        foreach (bool nop in new[] { true, false })
+        {
+            w = Mk(c => c.NoPvp = nop, 2); Place(w.Agents[0], 3000, 3000); Place(w.Agents[1], 3050, 3000); One(w, I(cmd: Cmd.Select, arg: 6)); Run(w, 1f, I(atk: true, aim: 0));
+            Check(nop ? w.Agents[1].Hp == 255 : w.Agents[1].Hp < 255, nop ? "sem PvP: um agente não fere o outro" : "controle: sem a regra o golpe fere");
+        }
 
         // ---------------- estresse
         var cfgS = Cfg(c => { c.DayLen = 30; c.NightLen = 30; c.Trees = 300; c.Rocks = 100; c.IronNodes = 40; c.SulfurNodes = 20; c.Crates = 20; c.Bushes = 40; c.Animals = 20; });

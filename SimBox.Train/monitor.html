@@ -78,13 +78,23 @@ async function poll() {
     const j = await r.json();
     if (j.nodes) nodes = j.nodes;
     if (j.nv !== undefined) nv = j.nv;
-    if (j.ag) { S = j; lastOk = Date.now(); if (Date.now() - slowAt > 1500) { slowOn = !!j.slow; renderSlow(); } }
+    if (j.ag) { S = j; S.dayVis = j.day || j.mode === 'coleta'; lastOk = Date.now(); if (Date.now() - slowAt > 1500) { slowOn = !!j.slow; renderSlow(); } }
   } catch (e) { /* servidor ocupado ou fechado */ }
   $('off').style.display = Date.now() - lastOk > 4000 ? 'flex' : 'none';
   setTimeout(poll, 100);
 }
 
 function headHtml() {
+  if (S.mode === 'coleta') {
+    const n = S.ag.length, ext = S.ag.filter(a => a[7] === 1).length, live = S.ag.filter(a => a[4]).length, dead = n - ext - live;
+    const sp0 = S.speed > 0 ? S.speed + '× tempo real' : 'velocidade máxima';
+    const phase = S.t < S.win ? `🌲 coleta · restam ${fmt(S.win - S.t)}` : '🚩 rumo à extração';
+    return `<div class="row"><b>Geração ${S.gen}</b><span>coleta e extração</span></div>
+    <div class="row"><span>${phase}</span><span>${fmt(S.t)} / ${fmt(S.tot)}${S.done ? ' · fim' : ''}</span></div>
+    <div class="row"><span class="t0">● ${live} em jogo</span><span style="color:#4ade80">✓ ${ext} extraídos</span><span style="color:var(--dim)">✝ ${dead}</span></div>
+    <div class="row"><span style="color:var(--dim)">ger. anterior: melhor ${S.best} · média ${S.avg}</span></div>
+    <div style="color:var(--dim)">${sp0} · ${VIEW === 'focus' ? 'Foco' : 'Mapa'} · frio constante</div>`;
+  }
   const a0 = S.ag.filter(a => a[1] === 0 && a[4]).length, a1 = S.ag.filter(a => a[1] === 1 && a[4]).length;
   const n0 = S.ag.filter(a => a[1] === 0).length, n1 = S.ag.filter(a => a[1] === 1).length;
   const sp = S.speed > 0 ? S.speed + '× tempo real' : 'velocidade máxima';
@@ -116,10 +126,18 @@ function drawMap() {
   const w = cv.width, h = cv.height, m = 16 * (devicePixelRatio || 1);
   const sc = Math.min((w - 2 * m) / S.W, (h - 2 * m) / S.H);
   const ox = (w - S.W * sc) / 2, oy = (h - S.H * sc) / 2, r = devicePixelRatio || 1;
-  cx.fillStyle = S.day ? '#141a21' : '#080a0e'; cx.fillRect(0, 0, w, h);
-  cx.fillStyle = S.day ? '#1b232c' : '#0d1117'; cx.fillRect(ox, oy, S.W * sc, S.H * sc);
+  cx.fillStyle = S.dayVis ? '#141a21' : '#080a0e'; cx.fillRect(0, 0, w, h);
+  cx.fillStyle = S.dayVis ? '#1b232c' : '#0d1117'; cx.fillRect(ox, oy, S.W * sc, S.H * sc);
   cx.strokeStyle = '#2f3a46'; cx.lineWidth = 1; cx.strokeRect(ox, oy, S.W * sc, S.H * sc);
   if (S.wall) { cx.fillStyle = '#9aa3ad'; cx.fillRect(ox + (S.wx - S.wt / 2) * sc, oy, Math.max(S.wt * sc, 3 * r), S.H * sc); }   // muro do meio
+  for (const z of (S.rz || [])) {                              // zonas de radiação
+    cx.fillStyle = 'rgba(220,60,60,.22)'; cx.strokeStyle = 'rgba(248,113,113,.7)'; cx.lineWidth = 1.2 * r;
+    cx.beginPath(); cx.arc(ox + z[0] * sc, oy + z[1] * sc, z[2] * sc, 0, 6.2832); cx.fill(); cx.stroke();
+  }
+  if (S.ext) {                                                 // ponto de extração (canto inferior esquerdo)
+    cx.fillStyle = 'rgba(74,222,128,.25)'; cx.strokeStyle = '#4ade80'; cx.lineWidth = 2 * r;
+    cx.beginPath(); cx.arc(ox + S.ext.x * sc, oy + S.ext.y * sc, S.ext.r * sc, 0, 6.2832); cx.fill(); cx.stroke();
+  }
   cx.fillStyle = '#e8c547';                                   // recursos: pontos amarelos
   for (const n of nodes) { cx.beginPath(); cx.arc(ox + n[0] * sc, oy + n[1] * sc, 1.8 * r, 0, 6.2832); cx.fill(); }
   cx.fillStyle = '#8a8f98';                                   // construções: quadrados cinza
@@ -129,6 +147,7 @@ function drawMap() {
   for (const g of S.gh) { cx.beginPath(); cx.arc(ox + g[0] * sc, oy + g[1] * sc, 2.6 * r, 0, 6.2832); cx.fill(); }
   const fid = S.foc.id;
   for (const a of S.ag) {                                     // agentes: azul / vermelho
+    if (a[7] === 1) continue;                                 // extraído: foi destruído no ponto de extração
     const x = ox + a[2] * sc, y = oy + a[3] * sc;
     if (!a[4]) { cx.strokeStyle = '#59616b'; cx.lineWidth = 1.2 * r; cx.beginPath(); cx.moveTo(x - 3 * r, y - 3 * r); cx.lineTo(x + 3 * r, y + 3 * r); cx.moveTo(x + 3 * r, y - 3 * r); cx.lineTo(x - 3 * r, y + 3 * r); cx.stroke(); continue; }
     cx.fillStyle = TEAM[a[1]]; cx.beginPath(); cx.arc(x, y, 4.5 * r, 0, 6.2832); cx.fill();
@@ -138,11 +157,15 @@ function drawMap() {
   $('side').style.display = 'block';
   $('side').innerHTML = '<h4 style="margin-top:0">Top 8 agora (fitness parcial)</h4>' + top.map((a, i) =>
     `<div class="row"><span><span class="chip" style="background:${TEAM[a[1]]}"></span>${i + 1}. A${a[0]}${a[4] ? '' : ' ✝'}</span><span>nív ${a[6]}</span><b>${a[5]}</b></div>`).join('') +
+    (S.mode === 'coleta' ? `<h4>Legenda</h4><div style="color:var(--dim)"><span class="chip" style="background:#3b82f6"></span>IA · ✕ morta · ◯ foco<br>
+     <span class="chip" style="background:#e8c547"></span>recursos <span class="chip" style="background:#8a8f98;border-radius:2px;margin-left:8px"></span>construções<br>
+     <span class="chip" style="background:rgba(220,60,60,.6)"></span>zona de radiação<br>
+     <span class="chip" style="background:#4ade80"></span>ponto de extração (1000 pts; destrói a IA)</div>` :
     `<h4>Placar da geração anterior</h4><div class="row"><span class="t0">Time 0</span><b>${S.sc0}</b></div><div class="row"><span class="t1">Time 1</span><b>${S.sc1}</b></div>
      <h4>Legenda</h4><div style="color:var(--dim)"><span class="chip" style="background:#3b82f6"></span>time 0 <span class="chip" style="background:#ef4444;margin-left:8px"></span>time 1<br>
      <span class="chip" style="background:#e8c547"></span>recursos <span class="chip" style="background:#8a8f98;border-radius:2px;margin-left:8px"></span>construções<br>
      <span class="chip" style="background:#9aa3ad;border-radius:2px"></span>muro do meio (cai nos 2 últimos dias)<br>
-     <span class="chip" style="background:#3fd35a"></span>inimigos (ghouls) · ✕ morto · ◯ foco</div>`;
+     <span class="chip" style="background:#3fd35a"></span>inimigos (ghouls) · ✕ morto · ◯ foco</div>`);
 }
 
 // ------------------------------------------------------------------ FOCO (top 1)
@@ -150,14 +173,24 @@ function drawFocus() {
   const F = S.foc, r = devicePixelRatio || 1, w = cv.width, h = cv.height;
   const sc = Math.max(w / 1700, h / 1100) * 0.98;            // ~1700×1100 unidades visíveis
   const X = x => w / 2 + (x - F.x) * sc, Y = y => h / 2 + (y - F.y) * sc;
-  cx.fillStyle = S.day ? '#26331f' : '#10160f'; cx.fillRect(0, 0, w, h);
-  cx.strokeStyle = S.day ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.035)'; cx.lineWidth = 1;
+  cx.fillStyle = S.dayVis ? '#26331f' : '#10160f'; cx.fillRect(0, 0, w, h);
+  cx.strokeStyle = S.dayVis ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.035)'; cx.lineWidth = 1;
   const g0 = Math.floor((F.x - w / 2 / sc) / 500) * 500, g1 = F.x + w / 2 / sc;
   for (let gx = g0; gx < g1; gx += 500) { cx.beginPath(); cx.moveTo(X(gx), 0); cx.lineTo(X(gx), h); cx.stroke(); }
   const k0 = Math.floor((F.y - h / 2 / sc) / 500) * 500, k1 = F.y + h / 2 / sc;
   for (let gy = k0; gy < k1; gy += 500) { cx.beginPath(); cx.moveTo(0, Y(gy)); cx.lineTo(w, Y(gy)); cx.stroke(); }
   cx.strokeStyle = '#6a7684'; cx.lineWidth = 3 * r; cx.strokeRect(X(0), Y(0), S.W * sc, S.H * sc);   // borda do mundo
   const vis = (x, y, rad) => X(x) > -rad * sc && X(x) < w + rad * sc && Y(y) > -rad * sc && Y(y) < h + rad * sc;
+  for (const z of (S.rz || [])) {                              // zonas de radiação
+    if (!vis(z[0], z[1], z[2])) continue;
+    cx.fillStyle = 'rgba(220,60,60,.20)'; cx.strokeStyle = 'rgba(248,113,113,.8)'; cx.lineWidth = 3 * r; cx.setLineDash([14 * r, 10 * r]);
+    cx.beginPath(); cx.arc(X(z[0]), Y(z[1]), z[2] * sc, 0, 6.2832); cx.fill(); cx.stroke(); cx.setLineDash([]);
+  }
+  if (S.ext && vis(S.ext.x, S.ext.y, S.ext.r)) {               // ponto de extração
+    cx.fillStyle = 'rgba(74,222,128,.22)'; cx.strokeStyle = '#4ade80'; cx.lineWidth = 4 * r;
+    cx.beginPath(); cx.arc(X(S.ext.x), Y(S.ext.y), S.ext.r * sc, 0, 6.2832); cx.fill(); cx.stroke();
+    cx.fillStyle = '#4ade80'; cx.font = (14 * r) + 'px system-ui'; cx.textAlign = 'center'; cx.fillText('EXTRAÇÃO', X(S.ext.x), Y(S.ext.y) + 5 * r); cx.textAlign = 'start';
+  }
   if (S.wall) {                                                // muro do meio
     const wx0 = X(S.wx - S.wt / 2), ww = S.wt * sc; cx.fillStyle = '#6f7782'; cx.fillRect(wx0, Y(0), ww, S.H * sc);
     cx.strokeStyle = '#aab3bd'; cx.lineWidth = 2 * r; cx.strokeRect(wx0, Y(0), ww, S.H * sc);
@@ -181,7 +214,7 @@ function drawFocus() {
   cx.fillStyle = '#fff';
   for (const p of S.pr) { if (!vis(p[0], p[1], 10)) continue; cx.beginPath(); cx.arc(X(p[0]), Y(p[1]), 5 * sc, 0, 6.2832); cx.fill(); }
   for (const a of S.ag) {                                      // agentes
-    if (!vis(a[2], a[3], 40)) continue; const foc = a[0] === F.id;
+    if (a[7] === 1 || !vis(a[2], a[3], 40)) continue; const foc = a[0] === F.id;
     cx.globalAlpha = a[4] ? 1 : .35; cx.fillStyle = TEAM[a[1]];
     cx.beginPath(); cx.arc(X(a[2]), Y(a[3]), 30 * sc, 0, 6.2832); cx.fill(); cx.globalAlpha = 1;
     cx.strokeStyle = foc ? '#fff' : '#000'; cx.lineWidth = (foc ? 3 : 1.5) * r; cx.stroke();
@@ -191,7 +224,7 @@ function drawFocus() {
     cx.strokeStyle = '#fff'; cx.lineWidth = 2 * r; cx.beginPath(); cx.moveTo(w / 2, h / 2);
     cx.lineTo(w / 2 + Math.cos(F.aim) * 95 * sc, h / 2 + Math.sin(F.aim) * 95 * sc); cx.stroke();
   }
-  if (!S.day) { cx.fillStyle = 'rgba(5,8,40,.28)'; cx.fillRect(0, 0, w, h); }
+  if (!S.dayVis) { cx.fillStyle = 'rgba(5,8,40,.28)'; cx.fillRect(0, 0, w, h); }
   cx.textAlign = 'start';
 
   const bar = (n, v, c) => `<div class="row"><span>${n}</span><span>${v}</span></div><div class="bar"><i style="width:${Math.max(0, Math.min(100, v / F.max * 100))}%;background:${c}"></i></div>`;
@@ -200,10 +233,11 @@ function drawFocus() {
   const mine = S.log.filter(l => l.includes('A' + F.id + '(')).slice(-5).map(l => `<div style="color:var(--dim);font:11px ui-monospace,Consolas,monospace">${esc(l)}</div>`).join('');
   $('side').innerHTML = `<div class="row"><b style="font-size:15px"><span class="chip" style="background:${TEAM[F.team]}"></span>Top 1 agora: A${F.id}</b><span>${F.alive ? '' : '✝ morto'}</span></div>
     <div class="row"><span>fitness parcial</span><b>${F.score}</b></div><div class="row"><span>reward da geração</span><span>${F.rew}</span></div>
-    <div class="row"><span>nível ${F.lvl}</span><span>ghouls ${F.kills} · inimigos ${F.ek} · amigos ${F.fk}</span></div>
+    ${S.mode === 'coleta' ? `<div class="row"><span>madeira ${F.gw} · pedra ${F.gs}</span><span>minério ${F.go} · frutas ${F.gf}</span></div>
+    <div class="row"><span>ferramentas ${F.tools}</span><span>na fila da mesa: ${F.q}${F.exd ? ' · ✓ EXTRAÍDO' : ''}</span></div>` : `<div class="row"><span>nível ${F.lvl}</span><span>ghouls ${F.kills} · inimigos ${F.ek} · amigos ${F.fk}</span></div>
     <div class="row"><span>dano inimigo ${F.edmg}</span><span>fogo amigo ${F.fdmg}</span></div>
-    <div class="row"><span>ferramentas ${F.tools}</span><span>doações ${F.don}</span></div>
-    <h4>Status</h4>${bar('Vida', F.hp, '#ef4444')}${bar('Fome', F.hu, '#f59e0b')}${bar('Frio', F.co, '#38bdf8')}${bar('Stamina', F.st, '#4ade80')}
+    <div class="row"><span>ferramentas ${F.tools}</span><span>doações ${F.don}</span></div>`}
+    <h4>Status</h4>${bar('Vida', F.hp, '#ef4444')}${bar('Fome', F.hu, '#f59e0b')}${bar('Frio', F.co, '#38bdf8')}${bar('Stamina', F.st, '#4ade80')}${S.mode === 'coleta' ? bar('Radiação', F.rad, '#a3e635') : ''}
     <h4>Decisão da rede</h4><div class="row"><span>comando</span><b>${F.in.cmd}</b></div>
     <div class="row"><span>mover</span><span>${F.in.mx}, ${F.in.my}${F.in.spr ? ' · corre' : ''}</span></div>
     <div class="row"><span>ataque</span><span>${F.in.atk ? 'SIM' : 'não'} · ${esc(F.wpn)} (tec. ${F.tier})</span></div>${craft}

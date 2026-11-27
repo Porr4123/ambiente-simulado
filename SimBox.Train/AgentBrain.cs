@@ -23,6 +23,14 @@ public sealed class AgentBrain
     public int GoodMeals { get; set; }     // comeu/curou sem desperdiçar
     public int WastedMeals { get; set; }   // comeu desperdiçando (ou comida que fere)
     public int SlotId { get; set; }        // índice do agente no mundo (só para registro)
+    // modelo de coleta
+    public bool Extracted { get; set; }    // chegou ao ponto de extração
+    public float ExtractedAt { get; set; } // segundo em que foi extraído
+    public float MinExtractDist { get; set; } = float.MaxValue;   // menor distância que chegou do ponto de extração
+    public int GotWood { get; set; }
+    public int GotStone { get; set; }
+    public int GotOre { get; set; }
+    public int GotFruit { get; set; }
 
     /// <summary>Última decisão da rede (para o monitor de foco).</summary>
     public AgentInput LastInput { get; private set; }
@@ -39,11 +47,11 @@ public sealed class AgentBrain
         Cmd.Store, Cmd.Take, Cmd.Drop, Cmd.Reload, Cmd.Eat
     };
 
-    public AgentBrain(NeuralNetwork? net = null, int team = 0, Random? rng = null)
+    public AgentBrain(NeuralNetwork? net = null, int team = 0, Random? rng = null, int inputs = 0)
     {
         Net = net ?? new NeuralNetwork(new[]
         {
-            FeatureExtractor.FeatureCount,  // entrada
+            inputs > 0 ? inputs : FeatureExtractor.FeatureCount,  // entrada (do modelo de treinamento)
             80,                             // camada 1
             48,                             // camada 2
             32,                             // camada 3
@@ -57,13 +65,15 @@ public sealed class AgentBrain
     {
         Fitness = Fitness, Survived = Survived, Deaths = Deaths, RawReward = RawReward,
         FinalLevel = FinalLevel, FinalKills = FinalKills, EnemyKills = EnemyKills, FriendKills = FriendKills,
-        EnemyDmg = EnemyDmg, FriendDmg = FriendDmg, ToolsMade = ToolsMade, Donations = Donations, StationsMade = StationsMade, GoodMeals = GoodMeals, WastedMeals = WastedMeals, SlotId = SlotId
+        EnemyDmg = EnemyDmg, FriendDmg = FriendDmg, ToolsMade = ToolsMade, Donations = Donations, StationsMade = StationsMade, GoodMeals = GoodMeals, WastedMeals = WastedMeals, SlotId = SlotId,
+        Extracted = Extracted, ExtractedAt = ExtractedAt, MinExtractDist = MinExtractDist, GotWood = GotWood, GotStone = GotStone, GotOre = GotOre, GotFruit = GotFruit
     };
 
     public void ResetStats()
     {
         Fitness = RawReward = EnemyDmg = FriendDmg = 0;
         Survived = false; Deaths = FinalLevel = FinalKills = EnemyKills = FriendKills = ToolsMade = Donations = StationsMade = GoodMeals = WastedMeals = 0;
+        Extracted = false; ExtractedAt = 0; MinExtractDist = float.MaxValue; GotWood = GotStone = GotOre = GotFruit = 0;
         LastInput = default;
     }
 
@@ -76,7 +86,9 @@ public sealed class AgentBrain
         Net.Write(bw);
     }
 
-    public static AgentBrain Load(string path)
+    /// <summary>Carrega um .brain. Se a rede salva tem MENOS entradas que o modelo atual (cérebro de versão anterior ou de outro modelo, cujas entradas
+    /// são prefixo das atuais), ela é ampliada com peso 0 nas entradas novas e se comporta como antes.</summary>
+    public static AgentBrain Load(string path, int expectedInputs = 0)
     {
         using var br = new BinaryReader(File.OpenRead(path));
         var magic = br.ReadBytes(4);
@@ -84,18 +96,19 @@ public sealed class AgentBrain
         if (br.ReadInt32() != 1) throw new InvalidDataException($"{path}: versão desconhecida");
         int team = br.ReadInt32(); float fit = br.ReadSingle();
         var net = NeuralNetwork.Read(br);
-        if (net.Layers[0] == FeatureExtractor.LegacyFeatureCount && FeatureExtractor.FeatureCount > net.Layers[0]) net = net.WithInputSize(FeatureExtractor.FeatureCount);   // cérebro da versão sem obstáculos: migra
-        if (net.Layers[0] != FeatureExtractor.FeatureCount || net.Layers[^1] != OutputSize)
-            throw new InvalidDataException($"{path}: rede com {net.Layers[0]} entradas, mas as features atuais são {FeatureExtractor.FeatureCount} (cérebro de versão antiga)");
+        int want = expectedInputs > 0 ? expectedInputs : FeatureExtractor.FeatureCount;
+        if (net.Layers[0] >= FeatureExtractor.LegacyFeatureCount && net.Layers[0] < want) net = net.WithInputSize(want);      // migra: entradas novas no fim, peso 0
+        if (net.Layers[0] != want || net.Layers[^1] != OutputSize)
+            throw new InvalidDataException($"{path}: rede com {net.Layers[0]} entradas, mas o modelo atual usa {want} (cérebro de versão antiga ou incompatível)");
         return new AgentBrain(net, team) { Fitness = fit };
     }
 
-    public AgentInput Decide(World w, Agent a)
+    public AgentInput Decide(World w, Agent a, TrainingModel? model = null)
     {
         // Morto fica morto até a próxima geração: nada de Respawn.
         if (!a.Alive) return LastInput = new AgentInput { Cmd = Cmd.None };
 
-        var features = FeatureExtractor.Extract(w, a);
+        var features = FeatureExtractor.Extract(w, a, model);
         var outp = Net.Forward(features);
 
         // Movimento contínuo
@@ -129,7 +142,7 @@ public sealed class AgentBrain
         switch (cmd)
         {
             case Cmd.Select:
-                arg = Math.Clamp((int)((argRaw + 1f) * 0.5f * a.Slots.Length), 0, a.Slots.Length - 1);
+                arg = model?.SelectOccupiedSlots == true ? PickSlot(a, argRaw) : Math.Clamp((int)((argRaw + 1f) * 0.5f * a.Slots.Length), 0, a.Slots.Length - 1);
                 break;
             case Cmd.Craft:
                 arg = PickCraftRecipe(w, a, argRaw);
@@ -154,6 +167,19 @@ public sealed class AgentBrain
             Cmd = cmd,
             Arg = arg
         };
+    }
+
+    /// <summary>Escolhe entre os slots ocupados e UM slot vazio (a "mão", necessária para colher fruta), em vez de um índice cru de slot.</summary>
+    static int PickSlot(Agent a, float raw)
+    {
+        var cand = new List<int>(a.Slots.Length + 1); bool emptyAdded = false;
+        for (int s = 0; s < a.Slots.Length; s++)
+        {
+            if (a.Slots[s].N > 0) cand.Add(s);
+            else if (!emptyAdded) { cand.Add(s); emptyAdded = true; }
+        }
+        int idx = Math.Clamp((int)((raw + 1f) * 0.5f * cand.Count), 0, cand.Count - 1);
+        return cand[idx];
     }
 
     static int PickCraftRecipe(World w, Agent a, float raw)

@@ -312,6 +312,10 @@ public static class Rw
     public const float HitGhoul = 0.01f;        // por ponto de dano em ghoul (× TechMult)
     public const float KillGhoulBase = 2f, KillGhoulPerKind = 1.5f;   // (base + por tipo) × TechMult
     public const float DonateFactor = 0.5f;     // doador ganha ToolBonus(item doado) × fator
+    // ---- modo coleta: a pontuação do modo é separada (World.Score) e só usa os valores abaixo ----
+    public const float CollectWood = 1f, CollectStone = 2f, CollectOre = 15f;   // pontos por unidade coletada (só até SimConfig.GatherWindow). Ferro/minério vale bem mais, mas exige picareta
+    public const float Extract = 1000f;                                          // pontos ao ser extraído no ponto de extração
+
     public const float EatPerPoint = 0.06f;     // comer/curar SEM desperdício: bônus por ponto de fome/vida realmente recuperado (cozida = ~7,6; laranja = 2,4; bandagem = 3,6)
 }
 
@@ -341,6 +345,21 @@ public sealed class SimConfig
     public int NightGhoulsBase = 4, NightGhoulsPerNight = 2;
     public float FlareSeconds = 5f, FlareRadius = 400f;
     public float Cycle => DayLen + NightLen;
+
+    // ---- modo coleta (tudo desligado por padrão: o jogo normal e o treino por times não mudam) ----
+    public bool NoGhouls;                                   // sem monstros (nenhum ghoul nasce)
+    public bool NoPvp;                                      // agentes não ferem outros agentes
+    public bool FiniteNodes;                                // recursos têm quantidade, quebram ao esgotar e reaparecem em outro lugar depois de NodeRespawnSeconds
+    public int TreeYield = 40, RockYield = 60, IronYield = 15, SulfurYield = 20;   // unidades de recurso por nó (FiniteNodes)
+    public float NodeRespawnSeconds = 90f;
+    public bool FruitHandOnly;                              // fruta só se colhe com a mão (nenhuma ferramenta selecionada)
+    public HashSet<Item>? AllowedCrafts;                    // null = tudo; senão só estes itens são fabricáveis (já liberados, sem pesquisa)
+    public bool StationQueues;                              // mesa de trabalho tem fila de fabricação própria, independente do jogador
+    public int StationQueueMax = 6;
+    public int RadZones; public float RadZoneRadius = 380f, RadRate = 30f;   // zonas de radiação fixas no mapa (RadRate = pontos de radiação/s dentro delas)
+    public bool Extraction; public float ExtractionRadius = 160f;            // ponto de extração no canto inferior esquerdo: o agente é destruído ao entrar
+    public bool CollectScore;                               // liga a pontuação de coleta (World.Score)
+    public float GatherWindow = 60f;                        // a coleta só pontua até este segundo da simulação
 }
 
 public sealed class Rng

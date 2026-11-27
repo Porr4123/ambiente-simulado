@@ -35,11 +35,25 @@ WASD anda · Shift corre (gasta stamina) · mouse mira · clique esquerdo usa o 
 
 ## Treino dos agentes (neuroevolução)
 
-    dotnet run --project SimBox.Train -c Release -- [--gens N] [--seed N] [--out runs] [--port 5080] [--speed X] [--resume runs/run_...] [--noopen] [--nomonitor] [--quiet] [--serial|--parallel]
+    dotnet run --project SimBox.Train -c Release -- [--gens N] [--seed N] [--out runs] [--port 5080] [--speed X] [--resume runs/run_...] [--model coleta|times] [--noopen] [--nomonitor] [--quiet] [--serial|--parallel]
 
 Sem `--gens` o treino é **ilimitado**: pare com **Ctrl+S** no console (termina ao fim da geração em curso, que é gravada; um 2º Ctrl+S encerra a geração em curso já). `--gens N` define um limite opcional.
 
-64 agentes (2 times de 32, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2).
+### Modelos de treino (`--model`)
+
+O treino é dividido em **modelos** (`SimBox.Train/Models/`): cada um define mundo, regras, entradas extras da rede, pontuação e registro. O padrão é `coleta`.
+
+**`coleta`** (padrão) — 32 IAs começam do zero num mundo sem monstros e sem combate:
+- 1 min para coletar (só a coleta dentro desse 1º minuto pontua: madeira 1 · pedra 2 · minério 15 por unidade) e mais 8 min (540 s no total) para chegar ao ponto de extração no canto inferior esquerdo, enfrentando fome, frio (constante) e 5 zonas de radiação fixas.
+- Ao entrar na extração a IA é destruída e ganha **1000 pontos**. Fitness = pontos de coleta + extração.
+- Pedra não sai com a mão (o agente começa com 2 pedras para o machado básico); minério exige picareta; fruta só se colhe com a mão. Recursos são finitos: quebram ao esgotar e reaparecem em outro lugar após 90 s.
+- Mesas de trabalho têm fila própria de fabricação (independente do jogador). Só existem 4 receitas, já liberadas: fogueira, mesa de trabalho, machado básico, picareta.
+- Ajustes: `SimBox.Train/Models/CollectModel.cs` (duração, janela, mapa) e `SimConfig` em `SimBox.Core/Defs.cs` (rendimento dos recursos, raio/taxa da radiação, etc.).
+
+**`times`** — o modo anterior: 64 agentes (2 times de 32, time = índice % 2) vivem juntos num mundo por geração (1 "semana" = 7 ciclos nas primeiras 28 gerações, depois 2), com combate, ghouls, muro entre os times e estações.
+
+As entradas extras de cada modelo ficam no fim do vetor da rede, então dá para retomar (`--resume`) cérebros de outro modelo: os pesos das entradas novas começam em 0.
+
 **Núcleos**: com 3+ núcleos lógicos o treino usa **1 núcleo para o mundo** (a thread principal: `World.Step`, monitor, progresso) e **1 núcleo para cada time** (threads dedicadas que só decidem — features + rede — os agentes do seu time, em paralelo, com o mundo parado/só leitura). O resultado é idêntico ao serial para a mesma seed. `--serial` força uma thread só; `--parallel` força o modo dividido mesmo com menos núcleos. As threads não são fixadas a um núcleo físico: quem escala é o sistema operacional.
 
 Rede `features → 80 → 48 → 32 → 16` (tanh). Os 8 melhores viram elite; o resto nasce de cruzamento + mutação. Os times são sempre 32×32.

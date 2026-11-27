@@ -8,6 +8,8 @@ public struct AgentInput { public float Mx, My, Aim, AimDist; public bool Sprint
 public sealed class Agent
 {
     public int Id, Team, Kills; public bool IsHuman, IsLeader, Alive = true;
+    // modo coleta
+    public bool Extracted; public float ExtractedAt, MinExtractDist = float.MaxValue; public int GotWood, GotStone, GotOre, GotFruit;
     // estatísticas da geração (zeradas em Reset): combate entre times e ferramentas
     public int EnemyKills, FriendKills, ToolsMade, Donations, StationsMade, GoodMeals, WastedMeals; public float EnemyDmg, FriendDmg;
     public bool[] ToolPaid = Array.Empty<bool>(), DonatePaid = Array.Empty<bool>(), StationPaid = Array.Empty<bool>();   // bônus já pago nesta geração (por item)
@@ -24,7 +26,7 @@ public sealed class Agent
 public sealed class Node
 {
     public int Id; public NodeKind Kind; public Vector2 Pos; public float R; public bool Solid = true, Alive = true;
-    public int Fruit; public float GrowAt, DieAt = -1, RespawnAt; public float Hp;
+    public int Fruit, Left; public float GrowAt, DieAt = -1, RespawnAt; public float Hp;      // Left = unidades restantes (FiniteNodes)
 }
 public sealed class Ghoul { public int Id; public GhoulKind Kind; public Vector2 Pos, Dir; public float Hp, MaxHp, Cd, WanderT; public bool Alive = true, Hostile; }
 public sealed class Animal { public int Id; public Vector2 Pos, Dir; public float Hp = 50, WanderT, FleeT; public bool Alive = true; }
@@ -33,6 +35,8 @@ public sealed class GroundItem { public int Id; public Item Item; public int N; 
 public sealed class Projectile { public int Id, OwnerTeam, OwnerId; public Item Kind; public Vector2 Pos, Dir; public float Speed, Dmg, Left; public bool FromRobot; }
 public sealed class Robot { public int Id, Team; public bool Hall; public Vector2 Pos; public float Hp, Cd, RepairT; public bool Alive = true; }
 public sealed class FlareZone { public Vector2 Pos; public float Left; }
+public sealed class CraftJob { public int Recipe, Owner; public float Left; }
+public readonly record struct RadZone(Vector2 Pos, float R);
 public struct Ev { public byte T; public float X, Y, X2, Y2; public int A; }
 
 public sealed partial class World
@@ -55,6 +59,17 @@ public sealed partial class World
 
     public float Time; public long TickCount; public bool Done;
     public float[] Rewards;
+    /// <summary>Pontuação do modo coleta (separada de Rewards): coleta dentro da janela + extração. Só avança com Cfg.CollectScore.</summary>
+    public float[] Score;
+    public readonly List<RadZone> RadZones = new();
+    /// <summary>Sobe quando um recurso quebra, reaparece ou muda de lugar (o monitor só reenvia os nós quando isto muda).</summary>
+    public int NodeVersion { get; internal set; }
+    /// <summary>Ponto de extração (canto inferior esquerdo) ou null se o modo não tem.</summary>
+    public Vector2? ExtractionPos { get; private set; }
+    readonly Dictionary<int, List<CraftJob>> queues = new();           // fila de fabricação de cada mesa de trabalho (por célula)
+    readonly List<(float at, Node n)> respawnList = new();             // nós quebrados esperando reaparecer
+    public IReadOnlyList<CraftJob>? QueueAt(int cell) => queues.TryGetValue(cell, out var q) ? q : null;
+    public int QueuedJobs(Agent a) { int n = 0; foreach (var q in queues.Values) foreach (var j in q) if (j.Owner == a.Id) n++; return n; }
     /// <summary>true = Rewards acumula até o próximo Reset() (treino por gerações); false = zera a cada Step (API clássica).</summary>
     public bool AccumulateRewards;
     /// <summary>Linhas de registro de eventos importantes (mortes, kills entre agentes, ferramentas, doações).</summary>
@@ -88,7 +103,7 @@ public sealed partial class World
         Agents = new Agent[agentCount];
         for (int i = 0; i < agentCount; i++)
             Agents[i] = new Agent { Id = i, IsLeader = i == 0, IsHuman = i == humanIndex, Slots = new Slot[cfg.InventorySlots], Mag = new int[Defs.ItemCount], Unlocked = new bool[Defs.ItemCount], ToolPaid = new bool[Defs.ItemCount], DonatePaid = new bool[Defs.ItemCount], StationPaid = new bool[Defs.ItemCount] };
-        Rewards = new float[agentCount];
+        Rewards = new float[agentCount]; Score = new float[agentCount];
         rng = new Rng(seed);
         Reset(seed);
     }
@@ -97,7 +112,7 @@ public sealed partial class World
     public void Reset(int seed)
     {
         rng = new Rng(seed); nextId = 1; Time = 0; TickCount = 0; Done = false; prevTin = 0; rotT = 0; wallAnnounced = false;
-        Array.Clear(BldGrid); Array.Clear(FloorGrid); Array.Clear(bldHp); Array.Clear(Rewards);
+        Array.Clear(BldGrid); Array.Clear(FloorGrid); Array.Clear(bldHp); Array.Clear(Rewards); Array.Clear(Score); queues.Clear(); respawnList.Clear(); RadZones.Clear();
         boxes.Clear(); fuel.Clear(); charge.Clear();
         Nodes.Clear(); Ghouls.Clear(); Animals.Clear(); Carcasses.Clear(); Drops.Clear(); Projs.Clear(); Robots.Clear(); Flares.Clear(); Events.Clear();
         foreach (var l in ngrid) l.Clear();
@@ -137,10 +152,11 @@ public sealed partial class World
     {
         a.Alive = true; a.Hp = a.Hunger = a.Cold = a.Stamina = Defs.StatMax; a.Rad = 0; a.AttackCd = a.CraftLeft = a.ReloadLeft = 0; a.CraftRecipe = -1;
         a.LastHurt = -99; a.Selected = 0; a.BornAt = Time; a.Vel = Vector2.Zero;
+        a.Extracted = false; a.ExtractedAt = 0; a.MinExtractDist = float.MaxValue; a.GotWood = a.GotStone = a.GotOre = a.GotFruit = 0;
         Array.Clear(a.Slots); Array.Clear(a.Mag);
         if (full) { a.Xp = 0; a.Level = 0; a.SkillPts = 0; a.Kills = 0; a.EnemyKills = a.FriendKills = a.ToolsMade = a.Donations = a.StationsMade = a.GoodMeals = a.WastedMeals = 0; a.EnemyDmg = a.FriendDmg = 0; Array.Clear(a.ToolPaid); Array.Clear(a.DonatePaid); Array.Clear(a.StationPaid); }
         Array.Clear(a.Unlocked);
-        foreach (var r in Defs.Recipes) if (r.SkillPts == 0) a.Unlocked[(int)r.Out] = true;
+        foreach (var r in Defs.Recipes) if (r.SkillPts == 0 || (Cfg.AllowedCrafts != null && Cfg.AllowedCrafts.Contains(r.Out))) a.Unlocked[(int)r.Out] = true;      // modo coleta: as 4 receitas já vêm liberadas, sem pesquisa
         AddItem(a, Stone, 2);                       // [wiki] você nasce com 2 pedras para fazer o machado
         if (!full) { a.Level = Defs.LevelFor(a.Xp); a.SkillPts = a.Level; }
     }
@@ -163,8 +179,10 @@ public sealed partial class World
         float r = k switch { NodeKind.Tree => 30, NodeKind.Rock => 38, NodeKind.IronOre => 38, NodeKind.SulfurOre => 36, NodeKind.Crate => 30, _ => 26 };
         var n = new Node { Id = nextId++, Kind = k, Pos = p, R = r, Solid = k != NodeKind.OrangeBush && k != NodeKind.TomatoBush, Hp = k == NodeKind.Crate ? 60 : 0 };
         if (k == NodeKind.OrangeBush || k == NodeKind.TomatoBush) n.Fruit = 3;
+        n.Left = YieldOf(k);
         Nodes.Add(n); ngrid[NodeCell(p)].Add(n); return n;
     }
+    int YieldOf(NodeKind k) => k switch { NodeKind.Tree => Cfg.TreeYield, NodeKind.Rock => Cfg.RockYield, NodeKind.IronOre => Cfg.IronYield, NodeKind.SulfurOre => Cfg.SulfurYield, _ => 0 };
     int NodeCell(Vector2 p) => Math.Clamp((int)(p.Y / NG), 0, NGH - 1) * NGW + Math.Clamp((int)(p.X / NG), 0, NGW - 1);
 
     bool NodeFree(Vector2 p, float r)
@@ -179,6 +197,7 @@ public sealed partial class World
         var forest = new float[gw * gh]; var rocky = new float[gw * gh];
         for (int i = 0; i < forest.Length; i++) { forest[i] = rng.Float(); rocky[i] = rng.Float(); }
         var center = new Vector2(W / 2, H / 2);
+        ExtractionPos = Cfg.Extraction ? new Vector2(Cfg.ExtractionRadius + 40, H - Cfg.ExtractionRadius - 40) : null;
         void Scatter(NodeKind k, int count, Func<float, float, float> weight)
         {
             int placed = 0, tries = 0;
@@ -187,6 +206,7 @@ public sealed partial class World
                 var p = new Vector2(rng.Float(80, W - 80), rng.Float(80, H - 80));
                 if (Vector2.Distance(p, center) < 350) continue;
                 if (InTeamBase(p, 150)) continue;
+                if (ExtractionPos is Vector2 ex0 && Vector2.Distance(p, ex0) < Cfg.ExtractionRadius + 100) continue;     // nada dentro/colado no ponto de extração
                 if (Cfg.TeamWall && MathF.Abs(p.X - W / 2) < Cfg.Cell / 2 + 60) continue;      // nada enterrado dentro do muro
                 if (!rng.Chance(weight(Sample(forest, gw, 600, p.X, p.Y), Sample(rocky, gw, 600, p.X, p.Y)))) continue;
                 float r = k == NodeKind.Tree ? 30 : 38; if (!NodeFree(p, r)) continue;
@@ -200,12 +220,22 @@ public sealed partial class World
         Scatter(NodeKind.OrangeBush, Cfg.Bushes * 2 / 3, (f, r) => f > 0.4f ? 1f : 0.1f);
         Scatter(NodeKind.TomatoBush, Cfg.Bushes / 3, (f, r) => f > 0.4f ? 1f : 0.1f);
         // "casas abandonadas": aglomerados de caixotes com sucata/enxofre
-        int clusters = Math.Max(1, Cfg.Crates / 5);
+        int clusters = Cfg.Crates <= 0 ? 0 : Math.Max(1, Cfg.Crates / 5);
         for (int c = 0; c < clusters; c++)
         {
             var cp = new Vector2(rng.Float(300, W - 300), rng.Float(300, H - 300));
             if (Vector2.Distance(cp, center) < 500 || InTeamBase(cp, 250)) { c--; continue; }
             for (int i = 0; i < 5; i++) { var p = cp + new Vector2(rng.Float(-110, 110), rng.Float(-110, 110)); if (NodeFree(p, 30)) AddNode(NodeKind.Crate, p); }
+        }
+        // zonas de radiação (só no modo coleta; sem sorteios quando RadZones = 0, então os outros modos geram o mesmo mundo de antes)
+        for (int z = 0, tries = 0; z < Cfg.RadZones && tries++ < 600;)
+        {
+            float r = Cfg.RadZoneRadius * rng.Float(0.8f, 1.2f); var p = new Vector2(rng.Float(r, W - r), rng.Float(r, H - r));
+            if (Vector2.Distance(p, center) < r + 500) continue;                                                   // longe do ponto de partida
+            if (ExtractionPos is Vector2 ex1 && Vector2.Distance(p, ex1) < r + Cfg.ExtractionRadius + 350) continue; // longe da extração (sempre dá para chegar)
+            bool overlap = false; foreach (var o in RadZones) if (Vector2.Distance(p, o.Pos) < r + o.R + 100) { overlap = true; break; }
+            if (overlap) continue;
+            RadZones.Add(new RadZone(p, r)); z++;
         }
     }
 
@@ -297,10 +327,10 @@ public sealed partial class World
         for (int i = 0; i < Agents.Length; i++)
         {
             var a = Agents[i]; var inp = i < inputs.Length ? inputs[i] : default;
-            if (!a.Alive) { if (inp.Cmd == Cmd.Respawn) Respawn(a); continue; }
+            if (!a.Alive) { if (inp.Cmd == Cmd.Respawn && !a.Extracted) Respawn(a); continue; }
             UpdateAgent(a, inp, dt);
         }
-        UpdateGhouls(dt); UpdateAnimals(dt); UpdateRobots(dt); UpdateProjectiles(dt); UpdatePlants();
+        UpdateGhouls(dt); UpdateAnimals(dt); UpdateRobots(dt); UpdateProjectiles(dt); UpdatePlants(); UpdateStations(dt); UpdateNodeRespawns();
         UpdateFires(dt); UpdateDrops(dt);
         for (int i = Flares.Count - 1; i >= 0; i--) if ((Flares[i].Left -= dt) <= 0) Flares.RemoveAt(i);
         rotT += dt; if (rotT >= Cfg.RotCheckSeconds) { rotT = 0; RotFood(); }
@@ -314,6 +344,7 @@ public sealed partial class World
         TopUpAnimals();
         foreach (var n in Nodes)
         {
+            if (Cfg.FiniteNodes) continue;                                  // modo coleta: reaparecem pela fila de respawn, não só ao amanhecer
             if (!n.Alive) { if (Time >= n.RespawnAt) { n.Alive = true; n.Hp = 60; } continue; }
             if (n.Kind == NodeKind.OrangeBush || n.Kind == NodeKind.TomatoBush) n.Fruit = 3;
         }
@@ -322,6 +353,7 @@ public sealed partial class World
 
     void DuskStart()
     {
+        if (Cfg.NoGhouls) return;
         int night = (int)(Time / Cfg.Cycle) + 1;
         var kinds = new List<GhoulKind>();
         for (int k = 0; k < 5; k++) if (Time >= Defs.Ghouls[k].UnlockCycle * Cfg.Cycle) kinds.Add((GhoulKind)k);

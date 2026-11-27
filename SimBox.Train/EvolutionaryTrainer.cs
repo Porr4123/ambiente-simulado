@@ -6,9 +6,10 @@ namespace SimBox.Train;
 
 public sealed class EvolutionaryTrainer
 {
-    public const int PopulationSize = 64;
-    public const int EliteCount = 8;          // os 8 melhores passam (e são salvos em disco)
-    public const int TeamSize = 32;           // 32 por time (time = índice % 2)
+    /// <summary>O que está sendo treinado (mundo, regras, pontuação, registro). Ver <see cref="TrainingModel"/>.</summary>
+    public readonly TrainingModel Model;
+    public int PopulationSize => Model.PopulationSize;
+    public int EliteCount => Model.EliteCount;          // os melhores passam (e são salvos em disco)
 
     public readonly AgentBrain[] Population;
     public int Generation { get; private set; }          // 0-based: próxima geração a rodar
@@ -45,20 +46,18 @@ public sealed class EvolutionaryTrainer
     public int Seed { get; }
 
     readonly Random rng;
-    readonly SimConfig? baseCfg;
     const int MaxEventLines = 4000;
 
-    // 1 semana nas primeiras 28 gerações, depois 2 semanas
-    public int WeeksForGeneration(int gen) => gen < 28 ? 1 : 2;
+    public int WeeksForGeneration(int gen) => Model.WeeksFor(gen);
 
-    public EvolutionaryTrainer(SimConfig? cfg = null, int? seed = null)
+    public EvolutionaryTrainer(TrainingModel? model = null, int? seed = null)
     {
+        Model = model ?? new CollectModel();
         Seed = seed ?? Random.Shared.Next();
         rng = new Random(Seed);
-        baseCfg = cfg;
         Population = new AgentBrain[PopulationSize];
         for (int i = 0; i < PopulationSize; i++)
-            Population[i] = new AgentBrain(team: i % 2, rng: rng);
+            Population[i] = new AgentBrain(team: Model.TeamOf(i), rng: rng, inputs: Model.InputSize);
     }
 
     /// <summary>Retoma de cérebros salvos: eles viram a elite; o resto nasce de cruzamento + mutação deles.</summary>
@@ -66,37 +65,16 @@ public sealed class EvolutionaryTrainer
     {
         for (int i = 0; i < PopulationSize; i++)
         {
-            if (i < saved.Count) Population[i] = new AgentBrain(saved[i].Net.Clone(), i % 2);
+            if (i < saved.Count) Population[i] = new AgentBrain(saved[i].Net.Clone(), Model.TeamOf(i));
             else
             {
                 var a = saved[rng.Next(saved.Count)]; var b = saved[rng.Next(saved.Count)];
                 var net = NeuralNetwork.Crossover(a.Net, b.Net, rng); net.Mutate(0.08f, 0.2f, rng);
-                Population[i] = new AgentBrain(net, i % 2);
+                Population[i] = new AgentBrain(net, Model.TeamOf(i));
             }
         }
         Generation = lastGenNumber; CurrentGeneration = lastGenNumber;
     }
-
-    static SimConfig MakeConfig() => new()
-    {
-        // Tempo COMPRIMIDO no treino: dia/noite curtos, mas ainda 7 ciclos = 1 "semana"
-        // Padrão wiki = 480+480=960s/ciclo. Aqui usamos 90+90=180s/ciclo (~5x mais rápido).
-        DayLen = 90f,
-        NightLen = 90f,
-        CraftTimeScale = 0.35f,
-        Tps = 20,                       // 20 TPS no treino (mais rápido que 30)
-        WorldW = 4500,                  // mapa um pouco menor
-        WorldH = 4500,
-        Trees = 500,
-        Rocks = 180,
-        IronNodes = 80,
-        SulfurNodes = 40,
-        Crates = 30,
-        Bushes = 60,
-        Animals = 25,
-        TeamSpawns = true,              // time 0 nasce à esquerda, time 1 à direita
-        TeamWall = true                 // muro vertical no meio separa os times; some nos 2 últimos dias (WallOpenTime, definido em RunGeneration)
-    };
 
     /// <summary>
     /// Roda uma geração completa: simula → avalia → registra → seleciona → reproduz.
@@ -106,16 +84,15 @@ public sealed class EvolutionaryTrainer
     {
         var wall = Stopwatch.StartNew();
         CurrentGeneration = Generation + 1;
-        int weeks = CurrentWeeks = WeeksForGeneration(Generation);
-        var cfg = MakeConfig();
-        float simSeconds = SimSeconds = weeks * 7 * cfg.Cycle;
-        cfg.WallOpenTime = simSeconds - 2 * cfg.Cycle;      // muro cai no começo dos 2 últimos dias
+        int weeks = CurrentWeeks = Model.WeeksFor(Generation);
+        var cfg = Model.MakeConfig();
+        float simSeconds = SimSeconds = Model.PrepareGeneration(cfg, Generation);
         int worldSeed = rng.Next();
 
         var world = new World(cfg, PopulationSize, worldSeed);
         for (int i = 0; i < PopulationSize; i++)
         {
-            world.Agents[i].Team = Population[i].Team;
+            world.Agents[i].Team = Model.TeamOf(i); Population[i].Team = Model.TeamOf(i);
             Population[i].ResetStats(); Population[i].SlotId = i;
         }
         world.Reset(worldSeed);             // de novo, agora com os times definidos (spawns por time)
@@ -135,9 +112,9 @@ public sealed class EvolutionaryTrainer
         DecisionPool? pool = null;
         if (ParallelTeams)
         {
-            var byTeam = new[] { new List<int>(), new List<int>() };
-            for (int i = 0; i < PopulationSize; i++) byTeam[world.Agents[i].Team & 1].Add(i);
-            pool = new DecisionPool(byTeam.Select(l => l.ToArray()).ToArray(), i => inputs[i] = Population[i].Decide(world, world.Agents[i]));
+            var byGroup = new[] { new List<int>(), new List<int>() };
+            for (int i = 0; i < PopulationSize; i++) byGroup[Model.GroupOf(i) & 1].Add(i);
+            pool = new DecisionPool(byGroup.Select(l => l.ToArray()).ToArray(), i => inputs[i] = Population[i].Decide(world, world.Agents[i], Model));
         }
         try {
         int totalTicks = (int)(simSeconds * cfg.Tps);
@@ -153,7 +130,7 @@ public sealed class EvolutionaryTrainer
                 if (pool != null) pool.Run();        // time 0 e time 1 decidem em paralelo (mundo parado, só leitura)
                 else
                     for (int i = 0; i < PopulationSize; i++)
-                        inputs[i] = Population[i].Decide(world, world.Agents[i]);
+                        inputs[i] = Population[i].Decide(world, world.Agents[i], Model);
             }
 
             world.Step(inputs);
@@ -183,33 +160,9 @@ public sealed class EvolutionaryTrainer
         Progress = 1f;
         onProgress?.Invoke(1f);
 
-        // --- Avaliação ---
-        // fitness = reward acumulado na geração (combate/times/ferramentas/coleta/...) + sobreviver(+100)/morrer(-50) + 2·nível
-        float team0 = 0, team1 = 0;
-        int survivors = 0;
-
-        for (int i = 0; i < PopulationSize; i++)
-        {
-            var brain = Population[i];
-            var agent = world.Agents[i];
-            brain.RawReward = world.Rewards[i];
-            brain.FinalLevel = agent.Level;
-            brain.FinalKills = agent.Kills;
-            brain.EnemyKills = agent.EnemyKills; brain.FriendKills = agent.FriendKills;
-            brain.EnemyDmg = agent.EnemyDmg; brain.FriendDmg = agent.FriendDmg;
-            brain.ToolsMade = agent.ToolsMade; brain.Donations = agent.Donations;
-            brain.StationsMade = agent.StationsMade; brain.GoodMeals = agent.GoodMeals; brain.WastedMeals = agent.WastedMeals;
-
-            bool survived = agent.Alive;
-            brain.Survived = survived;
-            if (survived) survivors++;
-
-            float fitness = brain.RawReward + (survived ? 100f : -50f) + agent.Level * 2f;
-            brain.Fitness = fitness;
-
-            if (brain.Team == 0) team0 += fitness;
-            else team1 += fitness;
-        }
+        // --- Avaliação (o modelo define o fitness) ---
+        var stats = Model.Evaluate(world, Population);
+        int survivors = stats.Survivors; float team0 = stats.Team0, team1 = stats.Team1;
 
         SurvivorsLastGen = survivors;
         Team0Score = team0;
@@ -226,9 +179,13 @@ public sealed class EvolutionaryTrainer
         {
             try
             {
-                LastGenDir = Logger.SaveGeneration(CurrentGeneration, BuildLog(world, cfg, weeks, worldSeed, wall.Elapsed.TotalSeconds, ranked, events), LastTop8);
-                Logger.AppendSummary(CurrentGeneration, weeks, wall.Elapsed.TotalSeconds, BestFitness, AvgFitness, survivors, team0, team1,
-                    Population.Sum(b => b.EnemyKills), Population.Sum(b => b.FriendKills));
+                var info = new GenerationInfo
+                {
+                    Generation = CurrentGeneration, WorldSeed = worldSeed, TrainSeed = Seed, Weeks = weeks, Survivors = survivors, WallSeconds = wall.Elapsed.TotalSeconds,
+                    SimSeconds = simSeconds, Best = BestFitness, Avg = AvgFitness, Team0 = team0, Team1 = team1, World = world, Cfg = cfg, Ranked = ranked
+                };
+                LastGenDir = Logger.SaveGeneration(CurrentGeneration, BuildLog(info, events), LastTop8);
+                Logger.AppendSummary(Model.SummaryHeader, Model.SummaryRow(info));
             }
             catch (Exception ex) { OnEvent?.Invoke($"[aviso] não consegui gravar o registro: {ex.Message}"); }
         }
@@ -238,25 +195,12 @@ public sealed class EvolutionaryTrainer
         Generation++;
     }
 
-    string BuildLog(World w, SimConfig cfg, int weeks, int worldSeed, double wallSec, AgentBrain[] ranked, List<string> events)
+    string BuildLog(GenerationInfo g, List<string> events)
     {
-        var inv = CultureInfo.InvariantCulture;
-        var sb = new StringBuilder();
-        sb.AppendLine($"=== Geração {CurrentGeneration} === {weeks} semana(s) · seed do mundo {worldSeed} · seed do treino {Seed}");
-        sb.AppendLine($"Simulado: {w.Time:0}s de {SimSeconds:0}s (dia {w.DayNumber}){(w.Done ? " — todos morreram, geração encerrada antes" : EndNow ? " — geração encerrada antes (Ctrl+S)" : "")} · tempo real: {wallSec:0.0}s");
-        sb.AppendLine(string.Format(inv, "Melhor fitness {0:0.0} · média {1:0.0} · sobreviventes {2}/{3}", BestFitness, AvgFitness, SurvivorsLastGen, PopulationSize));
-        sb.AppendLine(string.Format(inv, "Time 0 (azul): {0:0.0}   Time 1 (vermelho): {1:0.0}", Team0Score, Team1Score));
-        sb.AppendLine($"Ghouls abatidos: {w.KillsByKind.Sum()} (por tipo: {string.Join("/", w.KillsByKind)}) · mortes: {w.Deaths}");
-        sb.AppendLine("Regras: fitness = reward + 100 (vivo no fim) / -50 (morto) + 2·nível · mortos só renascem na próxima geração");
-        sb.AppendLine($"Muro entre os times: até {cfg.WallOpenTime:0}s (cai nos 2 últimos dias) · refBoa = comeu sem desperdício (bônus), refDesp = desperdiçou/comida que fere");
-        sb.AppendLine();
-        sb.AppendLine("  # slot time  fitness  reward vivo  nív ghouls  killsInim killsAmigo  danoInim danoAmigo ferram doações estaç refBoa refDesp");
-        for (int k = 0; k < ranked.Length; k++)
-        {
-            var b = ranked[k];
-            sb.AppendLine(string.Format(inv, "{0,3} {1,4}  T{2} {3,9:0.0} {4,8:0.0} {5,4} {6,4} {7,6} {8,10} {9,10} {10,9:0} {11,8:0} {12,6} {13,6} {14,5} {15,6} {16,7}",
-                k + 1, b.SlotId, b.Team, b.Fitness, b.RawReward, b.Survived ? "sim" : "não", b.FinalLevel, b.FinalKills, b.EnemyKills, b.FriendKills, b.EnemyDmg, b.FriendDmg, b.ToolsMade, b.Donations, b.StationsMade, b.GoodMeals, b.WastedMeals));
-        }
+        var w = g.World; var sb = new StringBuilder();
+        sb.AppendLine($"=== Geração {CurrentGeneration} === modelo {Model.Id} · {Model.GenerationTitle(Generation)} · seed do mundo {g.WorldSeed} · seed do treino {Seed}");
+        sb.AppendLine($"Simulado: {w.Time:0}s de {SimSeconds:0}s (dia {w.DayNumber}){(w.Done ? " — " + Model.DoneNote : EndNow ? " — geração encerrada antes (Ctrl+S)" : "")} · tempo real: {g.WallSeconds:0.0}s");
+        Model.WriteLogBody(sb, g);
         sb.AppendLine();
         sb.AppendLine($"--- Eventos ({events.Count}) ---");
         foreach (var e in events) sb.AppendLine(e);
@@ -281,14 +225,13 @@ public sealed class EvolutionaryTrainer
             float mutStr = Generation < 15 ? 0.35f : 0.22f;
             childNet.Mutate(mutRate, mutStr, rng);
 
-            next[i] = new AgentBrain(childNet, 0);
+            next[i] = new AgentBrain(childNet, Model.TeamOf(i));
         }
 
-        // Times SEMPRE equilibrados 32×32 (antes, as elites mantinham o time antigo e os times saíam desiguais).
-        // Índice par → time 0, ímpar → time 1; as elites ficam intercaladas entre os dois.
+        // Times SEMPRE equilibrados (no modelo de times: índice par → time 0, ímpar → time 1; as elites ficam intercaladas entre os dois).
         for (int i = 0; i < PopulationSize; i++)
         {
-            next[i].Team = i % 2;
+            next[i].Team = Model.TeamOf(i);
             next[i].ResetStats();
             Population[i] = next[i];
         }

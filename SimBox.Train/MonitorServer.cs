@@ -25,7 +25,7 @@ public sealed class MonitorServer
     volatile string state = "{}";
     sealed record NodesSnap(int V, string Json);
     volatile NodesSnap nodes = new(0, "[]");
-    World? nodesWorld; int nodesAlive = -1;
+    World? nodesWorld; int nodesAlive = -1, nodesVer = -1;
 
     int focusId = -1;
     readonly float baseSpeed;                 // velocidade escolhida na linha de comando (0 = máxima)
@@ -95,7 +95,7 @@ public sealed class MonitorServer
         ctx.Response.OutputStream.Write(body, 0, body.Length); ctx.Response.OutputStream.Close();
     }
 
-    static float LiveScore(World w, int i) => w.Rewards[i] + (w.Agents[i].Alive ? 0f : -50f) + w.Agents[i].Level * 2f;
+    float LiveScore(World w, int i) => trainer.Model.LiveScore(w, i);
 
     /// <summary>Chamado a cada tick no thread da simulação; só monta o snapshot a cada ~100 ms.</summary>
     public void Update(World w)
@@ -111,9 +111,9 @@ public sealed class MonitorServer
     {
         // nós (recursos) só vão para o navegador quando mudam
         int alive = 0; foreach (var n in w.Nodes) if (n.Alive) alive++;
-        if (w != nodesWorld || alive != nodesAlive)
+        if (w != nodesWorld || alive != nodesAlive || w.NodeVersion != nodesVer)      // NodeVersion: recurso que quebra e reaparece em outro lugar no mesmo instante
         {
-            nodesWorld = w; nodesAlive = alive;
+            nodesWorld = w; nodesAlive = alive; nodesVer = w.NodeVersion;
             var sbn = new StringBuilder("["); bool first = true;
             foreach (var n in w.Nodes)
             {
@@ -142,6 +142,7 @@ public sealed class MonitorServer
             j.WriteNumber("sc0", MathF.Round(trainer.Team0Score, 1)); j.WriteNumber("sc1", MathF.Round(trainer.Team1Score, 1));
             j.WriteNumber("speed", trainer.Speed); j.WriteBoolean("slow", slowOn);
             j.WriteBoolean("wall", w.WallActive); j.WriteNumber("wx", w.W / 2); j.WriteNumber("wt", w.Cfg.Cell);
+            j.WriteString("mode", trainer.Model.Id); trainer.Model.WriteMonitorExtras(j, w);
 
             j.WriteStartArray("ag");
             for (int i = 0; i < count; i++)
@@ -149,7 +150,7 @@ public sealed class MonitorServer
                 var a = w.Agents[i];
                 j.WriteStartArray(); j.WriteNumberValue(i); j.WriteNumberValue(a.Team & 1);
                 j.WriteNumberValue((int)a.Pos.X); j.WriteNumberValue((int)a.Pos.Y); j.WriteNumberValue(a.Alive ? 1 : 0);
-                j.WriteNumberValue(MathF.Round(score[i], 1)); j.WriteNumberValue(a.Level);
+                j.WriteNumberValue(MathF.Round(score[i], 1)); j.WriteNumberValue(a.Level); j.WriteNumberValue(a.Extracted ? 1 : 0);
                 j.WriteEndArray();
             }
             j.WriteEndArray();
@@ -186,6 +187,8 @@ public sealed class MonitorServer
             j.WriteNumber("lvl", f.Level); j.WriteNumber("kills", f.Kills); j.WriteNumber("ek", f.EnemyKills); j.WriteNumber("fk", f.FriendKills);
             j.WriteNumber("edmg", MathF.Round(f.EnemyDmg, 0)); j.WriteNumber("fdmg", MathF.Round(f.FriendDmg, 0));
             j.WriteNumber("tools", f.ToolsMade); j.WriteNumber("don", f.Donations);
+            j.WriteNumber("gw", f.GotWood); j.WriteNumber("gs", f.GotStone); j.WriteNumber("go", f.GotOre); j.WriteNumber("gf", f.GotFruit);
+            j.WriteBoolean("exd", f.Extracted); j.WriteNumber("q", w.QueuedJobs(f));
             j.WriteNumber("score", MathF.Round(score[focusId], 1)); j.WriteNumber("rew", MathF.Round(w.Rewards[focusId], 1));
             j.WriteNumber("sel", f.Selected);
             var sel = w.SelectedItem(f); j.WriteString("wpn", sel is Item si ? Defs.Name(si) : "mão"); j.WriteNumber("tier", sel is Item si2 ? Defs.Tier(si2) : 1);
